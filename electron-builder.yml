@@ -17,8 +17,14 @@ win:
     - target: nsis
       arch:
         - x64
+    # 单文件版：一个 exe 双击就能跑，不用安装
+    - target: portable
+      arch:
+        - x64
   icon: build/icon.ico
   artifactName: FeiyuLauncher-Setup-${version}.${ext}
+portable:
+  artifactName: FeiyuLauncher-${version}-portable.${ext}
 nsis:
   oneClick: false
   perMachine: false
