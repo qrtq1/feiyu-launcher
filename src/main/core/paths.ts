@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 /**
  * 目录约定（Minecraft 标准布局）：
@@ -14,9 +14,19 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
  */
 let gameDirOverride: string | null = null
 
+/**
+ * 数据根目录（存放 launcher-store.json 和 minecraft/）。
+ * 优先级：
+ *   1. FEIYU_DATA_DIR 环境变量（测试用）
+ *   2. 打包版：exe 旁边的 data\ —— 绿色版把数据带在自己身边，不写 C 盘
+ *   3. 开发模式：%APPDATA%\feiyu-launcher
+ */
 export function dataRoot(): string {
   if (process.env.FEIYU_DATA_DIR) return process.env.FEIYU_DATA_DIR
   try {
+    if (app?.isPackaged && app.getPath) {
+      return join(dirname(app.getPath('exe')), 'data')
+    }
     if (app?.getPath) return app.getPath('userData')
   } catch {
     /* 纯 node 环境（CLI 测试）下没有 electron app */
