@@ -1,0 +1,37 @@
+{
+  "name": "feiyu-launcher",
+  "version": "0.1.0",
+  "description": "肥鱼启动器 - 一个从零写起的 Minecraft 启动器",
+  "main": "./out/main/index.js",
+  "author": "feiyu",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "setup:electron": "node scripts/fetch-electron.mjs",
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && node scripts/dev.mjs",
+    "start": "node scripts/dev.mjs",
+    "cli:build": "node scripts/build-cli.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --import ./tests/stub/register.mjs --test \"tests/**/*.test.mts\"",
+    "pack": "node scripts/build.mjs && electron-builder --dir",
+    "dist": "node scripts/build.mjs && electron-builder"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.1",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "adm-zip": "^0.5.16",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "rollup": "^4.68.6",
+    "tslib": "^2.9.1",
+    "typescript": "^5.9.0"
+  }
+}

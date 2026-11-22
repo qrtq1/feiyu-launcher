@@ -1,0 +1,34 @@
+appId: com.feiyu.launcher
+productName: 肥鱼启动器
+copyright: MIT Licensed
+directories:
+  output: dist
+  buildResources: build
+# 用本地已经装好的 electron 二进制，避免打包时再下一遍 130MB
+electronDist: node_modules/electron/dist
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+asar: true
+compression: normal
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: FeiyuLauncher-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 肥鱼启动器
+  deleteAppDataOnUninstall: false
+mac:
+  target: dmg
+  category: public.app-category.games
+linux:
+  target: AppImage
+  category: Game
