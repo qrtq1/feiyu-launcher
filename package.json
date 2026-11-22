@@ -15,6 +15,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --import ./tests/stub/register.mjs --test \"tests/**/*.test.mts\"",
     "pack": "node scripts/build.mjs && electron-builder --dir",
+    "pack:green": "node scripts/build.mjs && electron-builder --dir && node scripts/greenify.mjs",
+    "pack:sfx": "node scripts/build.mjs && electron-builder --dir && node scripts/build-sfx.mjs",
     "dist": "node scripts/build.mjs && electron-builder"
   },
   "dependencies": {
