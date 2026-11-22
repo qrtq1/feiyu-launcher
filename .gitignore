@@ -16,3 +16,4 @@ docs/crop.png
 .idea/
 dist-review/
 build-review.log
+.e2e/

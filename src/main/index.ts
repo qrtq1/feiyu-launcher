@@ -64,7 +64,7 @@ const E2E_SCRIPT = `(async () => {
   const log = []
   const off = window.api.onLog((l) => log.push(l.line))
   try {
-    const s = await window.api.settings.set({ gameDir: 'D:/feiyu-launcher/.testdata/minecraft' })
+    const s = await window.api.settings.set({ gameDir: ${JSON.stringify(process.env.FEIYU_E2E_GAMEDIR ?? '')} })
     out.push('settings.gameDir=' + s.gameDir)
     const acc = await window.api.accounts.addOffline('E2ETester')
     out.push('account=' + acc.name + ' uuid=' + acc.uuid)
