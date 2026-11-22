@@ -10,6 +10,10 @@ files:
   - out/**/*
   - package.json
   - '!**/*.map'
+# 窗口/任务栏图标要从 resources 里读，打进安装包
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
 asar: true
 compression: normal
 win:

@@ -143,6 +143,8 @@ function createWindow(): void {
     frame: false,
     backgroundColor: '#0d1117',
     title: '肥鱼启动器',
+    // 窗口/任务栏图标：打包后从 resources 拿，开发时直接用 build 里的
+    icon: app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
