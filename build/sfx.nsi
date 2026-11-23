@@ -9,6 +9,9 @@ SilentInstall silent
 AutoCloseWindow true
 XPStyle on
 
+; 用启动器自己的图标，别顶着 NSIS 默认那个安装包图标
+Icon "D:\feiyu-launcher\build\icon.ico"
+
 !define APPNAME "肥鱼启动器"
 !define SRCDIR "D:\feiyu-launcher\dist\win-unpacked"
 
