@@ -8,7 +8,9 @@ const api = {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
     set: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke(IPC.settingsSet, patch),
     pickDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickDir),
-    pickJava: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickJava)
+    pickJava: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickJava),
+    pickBackground: (): Promise<{ path: string; kind: 'image' | 'video' | 'wallpaper' } | null> => ipcRenderer.invoke('dialog:pickBackground'),
+    resolveMedia: (path: string): Promise<string | null> => ipcRenderer.invoke(IPC.resolveMedia, path)
   },
   versions: {
     manifest: (force?: boolean) => ipcRenderer.invoke(IPC.manifest, force),
@@ -102,6 +104,19 @@ const api = {
     setSettings: (versionId: string, patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.instSettingsSet, versionId, patch),
     openFolder: (versionId: string, kind?: string) => ipcRenderer.invoke(IPC.instOpenFolder, versionId, kind),
     deleteFiles: (paths: string[]) => ipcRenderer.invoke(IPC.instDeleteFiles, paths)
+  },
+  multiplayer: {
+    status: () => ipcRenderer.invoke(IPC.mpStatus),
+    agree: () => ipcRenderer.invoke(IPC.mpAgree),
+    install: () => ipcRenderer.invoke(IPC.mpInstall),
+    start: () => ipcRenderer.invoke(IPC.mpStart),
+    host: () => ipcRenderer.invoke(IPC.mpHost),
+    join: (room: string) => ipcRenderer.invoke(IPC.mpJoin, room),
+    leave: () => ipcRenderer.invoke(IPC.mpLeave),
+    stop: () => ipcRenderer.invoke(IPC.mpStop),
+    state: () => ipcRenderer.invoke(IPC.mpState),
+    log: () => ipcRenderer.invoke(IPC.mpLog),
+    openDir: () => ipcRenderer.invoke(IPC.mpOpenDir)
   },
   onProgress: (cb: (p: DownloadProgress) => void) => {
     const h = (_e: unknown, p: DownloadProgress): void => cb(p)

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, promises as fs, renameSync, statSync, unlinkSync } from 'node:fs'
+import { createReadStream, createWriteStream, mkdirSync, promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
+import type { ReadableStream } from 'node:stream/web'
 import { pipeline } from 'node:stream/promises'
 
 export const UA = 'FeiyuLauncher/0.1.0 (Electron; +https://github.com/feiyu-launcher)'
@@ -16,12 +17,9 @@ export function ensureDir(dir: string): void {
 
 export async function sha1File(file: string): Promise<string> {
   const hash = createHash('sha1')
-  const rs = await fs.open(file, 'r').then((h) => h.createReadStream())
-  return new Promise((resolve, reject) => {
-    rs.on('data', (c) => hash.update(c))
-    rs.on('end', () => resolve(hash.digest('hex')))
-    rs.on('error', reject)
-  })
+  // Hash 本身就是 Writable；pipeline 保证出错时流也被清理
+  await pipeline(createReadStream(file), hash)
+  return hash.digest('hex')
 }
 
 export async function sha1Buffer(buf: Buffer | string): Promise<string> {
@@ -78,10 +76,11 @@ export async function downloadFile(
   dest: string,
   opts: { sha1?: string; size?: number; timeout?: number; retries?: number; altUrl?: string; onBytes?: (n: number) => void } = {}
 ): Promise<DownloadResult> {
-  ensureDir(dirname(dest))
+  // 下载热路径上的文件系统操作全走异步版，别在 Electron 主线程做同步 syscall
+  await fs.mkdir(dirname(dest), { recursive: true })
 
-  if (existsSync(dest)) {
-    const st = statSync(dest)
+  const st = await fs.stat(dest).catch(() => null)
+  if (st) {
     if (opts.size != null && st.size === opts.size) {
       if (opts.sha1) {
         const actual = await sha1File(dest).catch(() => '')
@@ -110,11 +109,15 @@ export async function downloadFile(
       } finally {
         clearTimeout(timer)
       }
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} @ ${tryUrl}`)
+      if (!res.ok || !res.body) {
+        // 未消费的响应体会占住连接，重试前显式取消
+        if (res.body) await res.body.cancel().catch(() => {})
+        throw new Error(`HTTP ${res.status} @ ${tryUrl}`)
+      }
 
       const hash = opts.sha1 ? createHash('sha1') : null
       let bytes = 0
-      const body = Readable.fromWeb(res.body as any)
+      const body = Readable.fromWeb(res.body as unknown as ReadableStream)
       body.on('data', (chunk: Buffer) => {
         bytes += chunk.length
         hash?.update(chunk)
@@ -124,16 +127,12 @@ export async function downloadFile(
       if (hash && opts.sha1 && hash.digest('hex') !== opts.sha1) {
         throw new Error(`sha1 mismatch @ ${tryUrl}`)
       }
-      if (existsSync(dest)) unlinkSync(dest)
-      renameSync(part, dest)
+      await fs.rm(dest, { force: true })
+      await fs.rename(part, dest)
       return { ok: true, skipped: false, bytes }
     } catch (e) {
       lastErr = e as Error
-      try {
-        if (existsSync(`${dest}.part`)) unlinkSync(`${dest}.part`)
-      } catch {
-        /* ignore */
-      }
+      await fs.unlink(`${dest}.part`).catch(() => {})
       // 限流/服务端过载要等久一点，别硬撞
       const throttled = /HTTP (429|503|502|504)\b/.test(lastErr.message)
       if (attempt < retries - 1) await sleep(throttled ? 2500 * (attempt + 1) : 700 * (attempt + 1))
@@ -146,7 +145,7 @@ export async function downloadFile(
 export async function pool<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length)
   let cursor = 0
-  const runners = Array.from({ length: Math.min(limit, Math.max(1, items.length)) }, async () => {
+  const runners = Array.from({ length: Math.min(Math.max(1, limit), Math.max(1, items.length)) }, async () => {
     while (true) {
       const i = cursor++
       if (i >= items.length) return

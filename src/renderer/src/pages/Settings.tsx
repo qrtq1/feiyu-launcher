@@ -8,6 +8,7 @@ export default function Settings() {
   const [javas, setJavas] = useState<JavaRuntimeInfo[]>([])
   const [loadingJava, setLoadingJava] = useState(false)
   const [picking, setPicking] = useState(false)
+  const [pickingBackground, setPickingBackground] = useState(false)
 
   const reloadJava = async (): Promise<void> => {
     setLoadingJava(true)
@@ -96,6 +97,25 @@ export default function Settings() {
     toast('已移除')
   }
 
+  const pickBackground = async (): Promise<void> => {
+    setPickingBackground(true)
+    try {
+      const picked = await window.api.settings.pickBackground()
+      if (!picked) return
+      await saveSettings({ backgroundPath: picked.path, backgroundKind: picked.kind })
+      toast(picked.kind === 'wallpaper' ? '网页壁纸已启用' : '背景已启用', 'ok')
+    } catch (e) {
+      toast(`设置背景失败：${(e as Error).message}`, 'err')
+    } finally {
+      setPickingBackground(false)
+    }
+  }
+
+  const clearBackground = (): void => {
+    set({ backgroundPath: '', backgroundKind: 'none' })
+    toast('已恢复默认背景')
+  }
+
   const downloadJava = async (): Promise<void> => {
     toast('开始下载 Java 17 运行时，可能需要几分钟……')
     try {
@@ -115,6 +135,36 @@ export default function Settings() {
           <p className="page-sub">改完立刻生效，不用保存按钮</p>
         </div>
       </div>
+
+      <section className="set-group">
+        <div className="set-title">界面外观</div>
+        <div className="set-row">
+          <div className="set-label">
+            自定义背景
+            <span className="set-desc">支持 PNG / JPG / WebP / GIF、MP4 / WebM，以及 Wallpaper Engine 的 HTML 网页壁纸入口</span>
+          </div>
+          <div className="set-control wide">
+            <div className="path-box" title={settings.backgroundPath || '默认浅色背景'}>
+              {settings.backgroundPath || '默认浅色背景'}
+            </div>
+            <button className="ghost-btn" disabled={pickingBackground} onClick={() => void pickBackground()}>
+              <Icon name="image" size={14} /> 选择背景
+            </button>
+            {settings.backgroundKind !== 'none' && <button className="ghost-btn" onClick={clearBackground}>恢复默认</button>}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">
+            强调色
+            <span className="set-desc">用于按钮、进度条、选中状态和焦点提示</span>
+          </div>
+          <div className="set-control">
+            <input className="color-input" type="color" value={settings.accentColor} onChange={(e) => set({ accentColor: e.target.value })} aria-label="选择强调色" />
+            <span className="path-box color-value">{settings.accentColor}</span>
+            <button className="ghost-btn" onClick={() => set({ accentColor: '#1663bc' })}>恢复默认</button>
+          </div>
+        </div>
+      </section>
 
       <section className="set-group">
         <div className="set-title">游戏目录</div>

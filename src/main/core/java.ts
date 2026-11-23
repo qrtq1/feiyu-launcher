@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
-import { existsSync, openSync, readFileSync, closeSync, promises as fs, rmSync } from 'node:fs'
+import { existsSync, openSync, readFileSync, closeSync, readdirSync, promises as fs, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { JavaRuntimeInfo } from '../../shared/types'
-import { downloadFile, ensureDir, formatBytes, pool, retry } from './http'
-import { getDownloadSource, rewriteUrl } from './manifest'
+import { downloadFile, ensureDir, pool, retry } from './http'
+import { rewriteUrl } from './manifest'
 import { P } from './paths'
 
 const JAVA_RUNTIME_ALL = 'https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json'
@@ -82,21 +82,20 @@ export function probeJava(exe: string): Promise<{ version: string; major: number
       clearTimeout(timer)
       finish(e)
     })
-    child.on('exit', () => {
+    // stdio 是文件描述符不是 pipe：close 时写入已完成，不必额外等 120ms
+    child.on('close', () => {
       clearTimeout(timer)
-      setTimeout(() => {
-        let text = ''
-        try {
-          text = readFileSync(tmp, 'utf8')
-        } catch {
-          /* ignore */
-        }
-        const ver = /java\.version\s*=\s*(\S+)/.exec(text)?.[1] ?? /version "([^"]+)"/.exec(text)?.[1]
-        if (!ver) return finish(new Error(`无法解析 java 版本: ${(text || '(空输出)').slice(0, 200)}`))
-        const major = ver.startsWith('1.') ? parseInt(ver.split('.')[1], 10) : parseInt(ver.split('.')[0], 10)
-        const arch = /os\.arch\s*=\s*(\S+)/.exec(text)?.[1]
-        finish(null, { version: ver, major: Number.isFinite(major) ? major : 0, arch })
-      }, 120)
+      let text = ''
+      try {
+        text = readFileSync(tmp, 'utf8')
+      } catch {
+        /* ignore */
+      }
+      const ver = /java\.version\s*=\s*(\S+)/.exec(text)?.[1] ?? /version "([^"]+)"/.exec(text)?.[1]
+      if (!ver) return finish(new Error(`无法解析 java 版本: ${(text || '(空输出)').slice(0, 200)}`))
+      const major = ver.startsWith('1.') ? parseInt(ver.split('.')[1], 10) : parseInt(ver.split('.')[0], 10)
+      const arch = /os\.arch\s*=\s*(\S+)/.exec(text)?.[1]
+      finish(null, { version: ver, major: Number.isFinite(major) ? major : 0, arch })
     })
   })
 }
@@ -120,7 +119,7 @@ function commonJavaDirs(): string[] {
   ]
   for (const c of candidates) {
     try {
-      for (const name of require('node:fs').readdirSync(c)) {
+      for (const name of readdirSync(c)) {
         const exe = process.platform === 'win32' ? join(c, name, 'bin', 'java.exe') : join(c, name, 'bin', 'java')
         if (existsSync(exe)) dirs.push(exe)
       }
@@ -136,13 +135,10 @@ let extraJavaPaths: string[] = []
 export function setExtraJavaPaths(paths: string[]): void {
   extraJavaPaths = paths.filter(Boolean)
 }
-export function getExtraJavaPaths(): string[] {
-  return [...extraJavaPaths]
-}
 
 /** 探测所有可用 Java：mojang 下载的 + 系统的 + 用户手动加的 */
 export async function listJava(): Promise<JavaRuntimeInfo[]> {
-  const out: JavaRuntimeInfo[] = []
+  const candidates: { exe: string; source: JavaRuntimeInfo['source'] }[] = []
   // 1) 启动器自己下载的
   try {
     const comps = await fs.readdir(P.runtime, { withFileTypes: true })
@@ -150,42 +146,42 @@ export async function listJava(): Promise<JavaRuntimeInfo[]> {
       if (!c.isDirectory()) continue
       const exe = javaExe(c.name)
       if (!existsSync(exe)) continue
-      try {
-        const p = await probeJava(exe)
-        out.push({ path: exe, version: p.version, major: p.major, source: 'mojang' })
-      } catch {
-        /* ignore */
-      }
+      candidates.push({ exe, source: 'mojang' })
     }
   } catch {
     /* runtime 目录还没建 */
   }
-  // 2) 系统 PATH
+  // 2) 系统 PATH + 常见安装目录
   const pathDirs = (process.env['PATH'] ?? '').split(process.platform === 'win32' ? ';' : ':')
-  const candidates = new Set<string>()
+  const systemExes = new Set<string>()
   for (const d of pathDirs) {
     const exe = join(d, process.platform === 'win32' ? 'java.exe' : 'java')
-    if (existsSync(exe)) candidates.add(exe)
+    if (existsSync(exe)) systemExes.add(exe)
   }
-  for (const exe of commonJavaDirs()) candidates.add(exe)
-  for (const exe of candidates) {
-    try {
-      const p = await probeJava(exe)
-      if (p.major >= 8 && p.major < 40) out.push({ path: exe, version: p.version, major: p.major, source: 'system' })
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const exe of commonJavaDirs()) systemExes.add(exe)
+  for (const exe of systemExes) candidates.push({ exe, source: 'system' })
   // 3) 用户手动添加的（哪怕不在 PATH、不在常见目录也认）
   for (const exe of extraJavaPaths) {
     if (!existsSync(exe)) continue
-    try {
-      const p = await probeJava(exe)
-      out.push({ path: exe, version: p.version, major: p.major, source: 'custom' })
-    } catch {
-      /* 路径失效了就跳过 */
-    }
+    candidates.push({ exe, source: 'custom' })
   }
+  // 先去重再探测：PATH / 常见目录 / 手动路径经常重叠，同一个 java 别 spawn 两次。
+  // Map.set 保留首次插入位置、后来源覆盖先来源，与原来「探测后去重」的语义一致
+  const unique = new Map<string, { exe: string; source: JavaRuntimeInfo['source'] }>()
+  for (const c of candidates) unique.set(c.exe.toLowerCase(), c)
+  // 并发探测：每个 probe 都要起一个 java 进程，串行太慢。
+  // pool 按候选原顺序回填结果，过滤/排序规则与串行版完全一致
+  const probed = await pool([...unique.values()], 4, async (c): Promise<JavaRuntimeInfo | null> => {
+    try {
+      const p = await probeJava(c.exe)
+      if (c.source === 'system' && !(p.major >= 8 && p.major < 40)) return null
+      return { path: c.exe, version: p.version, major: p.major, source: c.source }
+    } catch {
+      /* 探测失败 / 路径失效就跳过 */
+      return null
+    }
+  })
+  const out = probed.filter((j): j is JavaRuntimeInfo => j !== null)
   // 去重
   const dedup = new Map<string, JavaRuntimeInfo>()
   for (const j of out) dedup.set(j.path.toLowerCase(), j)
@@ -267,13 +263,9 @@ export async function downloadJavaRuntime(component: string, onProgress?: (done:
 }
 
 async function fetchJsonSafe<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { 'User-Agent': 'FeiyuLauncher/0.1.0' } })
+  // 裸 fetch 挂起时 retry 也救不了，必须有超时
+  const res = await fetch(url, { headers: { 'User-Agent': 'FeiyuLauncher/0.1.0' }, signal: AbortSignal.timeout(25000) })
   if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}`)
   return (await res.json()) as T
 }
 
-export function describeJava(j: JavaRuntimeInfo): string {
-  return `Java ${j.major} (${j.version}) ${j.source === 'mojang' ? '内置' : '系统'}`
-}
-
-export { formatBytes, getDownloadSource }

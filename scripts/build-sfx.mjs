@@ -5,14 +5,21 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** electron-builder 把 NSIS 缓存在 %LOCALAPPDATA%\electron-builder\Cache\nsis-*\*\Bin\makensis.exe */
 function findMakensis() {
   const base = join(process.env.LOCALAPPDATA ?? '', 'electron-builder', 'Cache')
   if (!existsSync(base)) return null
-  for (const name of readdirSync(base)) {
-    if (!name.startsWith('nsis-') || name.startsWith('nsis-resources')) continue
+  // 多版本缓存时按版本号取最大，别依赖 readdir 的顺序
+  const names = readdirSync(base)
+    .filter((n) => n.startsWith('nsis-') && !n.startsWith('nsis-resources'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .reverse()
+  for (const name of names) {
     const dir = join(base, name)
     for (const inner of readdirSync(dir)) {
       const exe = join(dir, inner, 'Bin', 'makensis.exe')
@@ -28,12 +35,12 @@ if (!makensis) {
   process.exit(1)
 }
 
-const script = join(process.cwd(), 'build', 'sfx.nsi')
+const script = join(root, 'build', 'sfx.nsi')
 if (!existsSync(script)) {
   console.error('[sfx] 找不到 build/sfx.nsi')
   process.exit(1)
 }
-if (!existsSync(join(process.cwd(), 'dist', 'win-unpacked'))) {
+if (!existsSync(join(root, 'dist', 'win-unpacked'))) {
   console.error('[sfx] 找不到 dist/win-unpacked，先跑 electron-builder --dir')
   process.exit(1)
 }

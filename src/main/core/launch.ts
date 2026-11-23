@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { closeSync, existsSync, openSync, readSync, statSync, writeSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import type { Account, GameArgument, LaunchStatus, LogLine, Settings, VersionJson } from '../../shared/types'
 import type { JavaRuntimeInfo } from '../../shared/types'
 import { buildClasspath, resolveLibraries, rulesAllow } from './install'
@@ -40,7 +41,7 @@ export function splitArgs(raw: string): string[] {
  * 玩家遇到崩溃最常见的第一反应就是把 logs/ 里的日志贴出去求助，
  * 所以落盘前必须先打码。
  */
-const SECRET_FLAGS = new Set(['--accessToken', '--uuid', '--xuid', '--clientId', '--userProperties'])
+const SECRET_FLAGS = new Set(['--accessToken', '--session', '--uuid', '--xuid', '--clientId', '--userProperties'])
 
 const REDACTED = '<已隐藏>'
 
@@ -144,7 +145,7 @@ export function buildCommand(o: BuildOptions): BuiltCommand {
     resolution_height: String(o.height ?? 480)
   }
 
-  const sub = (s: string): string => s.replace(/\$\{([a-z_0-9]+)\}/gi, (m, k: string) => (k in tokens ? tokens[k] : m))
+  const sub = (s: string): string => s.replace(/\$\{([a-z_0-9]+)\}/gi, (m, k: string) => (Object.hasOwn(tokens, k) ? tokens[k] : m))
 
   // ---- JVM 参数 ----
   const jvm: string[] = []
@@ -271,21 +272,29 @@ export async function launchGame(opts: {
   opts.onLog({ stream: 'launcher', line: `日志文件: ${logFile}`, ts: Date.now() })
 
   let buf = ''
+  // 中文日志一个汉字 3 字节，按 chunk 独立 toString 会把跨边界的字切成不可逆乱码
+  const decoder = new StringDecoder('utf8')
   const drain = (): void => {
     let text = ''
     try {
       const st = statSync(logFile)
       if (st.size <= offset) return
-      const len = st.size - offset
-      const b = Buffer.alloc(len)
+      // 单次读取封顶：游戏刷屏时别一次性同步读几 MB 卡住主进程，剩余下个 tick 继续
+      const len = Math.min(st.size - offset, 65536)
+      const b = Buffer.allocUnsafe(len)
       const rfd = openSync(logFile, 'r')
+      let got = 0
       try {
-        readSync(rfd, b, 0, len, offset)
+        while (got < len) {
+          const n = readSync(rfd, b, got, len - got, offset + got)
+          if (n <= 0) break
+          got += n
+        }
       } finally {
         closeSync(rfd)
       }
-      offset = st.size
-      text = b.toString('utf8')
+      offset += got
+      text = decoder.write(b.subarray(0, got))
     } catch {
       return
     }
@@ -306,6 +315,8 @@ export async function launchGame(opts: {
   const killTimer: NodeJS.Timeout[] = []
 
   const stop = (): void => {
+    // 进程已退出就别再 kill，也别留 8s 孤儿定时器
+    if (child.exitCode !== null || child.signalCode !== null) return
     try {
       child.kill()
     } catch {
@@ -331,7 +342,14 @@ export async function launchGame(opts: {
     for (const t of killTimer) clearTimeout(t)
     // 等最后一段日志落盘
     setTimeout(() => {
-      drain()
+      // 退出时把剩余日志读完整（drain 有单次上限，循环到读不动为止）
+      for (;;) {
+        const before = offset
+        drain()
+        if (offset === before) break
+      }
+      const tail = decoder.end()
+      if (tail) buf += tail
       if (buf.trim()) opts.onLog({ stream: 'stdout', line: buf.trim(), ts: Date.now() })
       buf = ''
       try {

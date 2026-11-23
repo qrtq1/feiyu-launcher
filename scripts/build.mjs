@@ -1,5 +1,5 @@
 import { builtinModules } from 'node:module'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { rollup } from 'rollup'
@@ -122,8 +122,6 @@ async function buildRenderer() {
 const t0 = Date.now()
 await rm(out, { recursive: true, force: true })
 await mkdir(out, { recursive: true })
-await buildMain()
-await buildPreload()
-await buildRenderer()
+// 三个 bundle 相互独立，并行构建
+await Promise.all([buildMain(), buildPreload(), buildRenderer()])
 console.log(`构建完成 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
-void readFile

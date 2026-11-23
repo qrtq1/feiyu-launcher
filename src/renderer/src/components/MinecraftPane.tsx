@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { VersionManifest, VersionManifestEntry } from '../../../shared/types'
 import { useApp } from '../store'
-import { Icon, Spinner, Tag } from '../components/ui'
+import { Icon, Spinner } from '../components/ui'
+
+const DT_FMT = new Intl.DateTimeFormat('zh-CN')
 
 export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versionId: string) => void }) {
   const { localVersions, installVersion, installing, progress, reloadLocal, toast } = useApp()
@@ -12,6 +14,7 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
   const [cloneSrc, setCloneSrc] = useState<string | null>(null)
   const [cloneName, setCloneName] = useState('')
   const [cloning, setCloning] = useState(false)
+  const loadReq = useRef(0)
 
   const openClone = (srcId: string): void => {
     setCloneSrc(srcId)
@@ -20,6 +23,7 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
   }
 
   const doClone = async (): Promise<void> => {
+    if (cloning) return
     if (!cloneSrc) return
     setCloning(true)
     try {
@@ -38,16 +42,19 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
   const [typeFilter, setTypeFilter] = useState<'all' | 'release' | 'snapshot' | 'old' | 'april'>('all')
 
   const load = async (): Promise<void> => {
+    const req = ++loadReq.current
     setLoading(true)
     setError(null)
     try {
       const m = await window.api.versions.manifest()
+      if (req !== loadReq.current) return
       setManifest(m)
       await reloadLocal()
+      if (req !== loadReq.current) return
     } catch (e) {
-      setError((e as Error).message)
+      if (req === loadReq.current) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (req === loadReq.current) setLoading(false)
     }
   }
 
@@ -82,17 +89,17 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
     return { release, snapshot, old, april }
   }, [manifest, query])
 
-  const row = (v: VersionManifestEntry, showIcon = true) => {    const ok = installed.has(v.id)
+  const row = (v: VersionManifestEntry) => {    const ok = installed.has(v.id)
     const t = v.type === 'release' ? 'release' : v.type === 'snapshot' ? 'snapshot' : 'old'
     return (
       <div key={v.id} className="ver-row">
-        {showIcon && <div className={`ver-icon ${t}`}>
+        <div className={`ver-icon ${t}`}>
           {v.type === 'release' ? <Icon name="grid" size={18} /> : v.type === 'snapshot' ? <Icon name="sparkles" size={18} /> : <Icon name="box" size={18} />}
-        </div>}
+        </div>
         <div className="ver-main">
           <div className="ver-id">{v.id}</div>
           <div className="ver-meta">
-            {v.type === 'release' ? '正式版' : v.type === 'snapshot' ? '预览版' : '远古版'} · {new Date(v.releaseTime).toLocaleString('zh-CN')}
+            {v.type === 'release' ? '正式版' : v.type === 'snapshot' ? '预览版' : '远古版'} · {DT_FMT.format(new Date(v.releaseTime))}
           </div>
         </div>
         {ok ? (
@@ -172,7 +179,7 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
                   </div>
                   <div className="ver-main">
                     <div className="ver-id">{latestRelease.id}</div>
-                    <div className="ver-meta">最新正式版，发布于 {new Date(latestRelease.releaseTime).toLocaleString('zh-CN')}</div>
+                    <div className="ver-meta">最新正式版，发布于 {DT_FMT.format(new Date(latestRelease.releaseTime))}</div>
                   </div>
                   {installed.has(latestRelease.id) ? (
                     <>
@@ -197,7 +204,7 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
                   </div>
                   <div className="ver-main">
                     <div className="ver-id">{latestSnapshot.id}</div>
-                    <div className="ver-meta">最新预览版，发布于 {new Date(latestSnapshot.releaseTime).toLocaleString('zh-CN')}</div>
+                    <div className="ver-meta">最新预览版，发布于 {DT_FMT.format(new Date(latestSnapshot.releaseTime))}</div>
                   </div>
                   {installed.has(latestSnapshot.id) ? (
                     <>
@@ -287,7 +294,7 @@ export default function MinecraftPane({ onPickLoader }: { onPickLoader?: (versio
               value={cloneName}
               onChange={(e) => setCloneName(e.target.value)}
               placeholder="新实例名字，比如 1.20.1-2"
-              onKeyDown={(e) => e.key === 'Enter' && void doClone()}
+              onKeyDown={(e) => e.key === 'Enter' && !cloning && void doClone()}
             />
             <div className="modal-actions">
               <button className="ghost-btn" onClick={() => setCloneSrc(null)}>

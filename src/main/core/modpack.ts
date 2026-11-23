@@ -1,9 +1,9 @@
 import { existsSync, promises as fs } from 'node:fs'
-import { dirname, join, normalize } from 'node:path'
+import { dirname, join } from 'node:path'
 import { downloadFile, ensureDir, pool } from './http'
 import { installLoader, type LoaderType } from './loaders'
 import { installVersion, type InstallContext } from './install'
-import { P } from './paths'
+import { P, safeJoin } from './paths'
 
 interface MrpackIndex {
   formatVersion: number
@@ -19,13 +19,6 @@ export interface ModpackInstallResult {
   files: number
   loader?: LoaderType
   loaderVersion?: string
-}
-
-/** 安全地把 mrpack 里的相对路径映射到版本目录下 */
-function safeJoin(base: string, rel: string): string | null {
-  const p = normalize(rel).replace(/\\/g, '/')
-  if (p.startsWith('..') || p.includes('/../') || p.startsWith('/') || /^[a-zA-Z]:/.test(p)) return null
-  return join(base, p)
 }
 
 /**
@@ -52,7 +45,7 @@ export async function installModpack(mrpackPath: string, ctx: InstallContext): P
   // 1) 原版
   if (!existsSync(P.versionJson(mc))) {
     ctx.onProgress({ taskId: ctx.taskId, phase: '安装整合包基底', current: 0, total: 1, bytesDone: 0, bytesTotal: 0, finished: false, currentFile: `Minecraft ${mc}` })
-    await installVersion(mc, { ...ctx, taskId: ctx.taskId })
+    await installVersion(mc, ctx)
   }
 
   // 2) 加载器
@@ -73,7 +66,7 @@ export async function installModpack(mrpackPath: string, ctx: InstallContext): P
     loaderVersion = neoVer
   }
   if (loader && loaderVersion) {
-    const r = await installLoader(loader, mc, loaderVersion, { ...ctx, taskId: ctx.taskId })
+    const r = await installLoader(loader, mc, loaderVersion, ctx)
     versionId = r.versionId
   }
 
@@ -106,12 +99,17 @@ export async function installModpack(mrpackPath: string, ctx: InstallContext): P
   // 4) overrides
   const ovEntries = zip.getEntries().filter((e) => e.entryName.startsWith('overrides/') && !e.isDirectory)
   ctx.onProgress({ taskId: ctx.taskId, phase: '展开整合包配置', current: 0, total: ovEntries.length, bytesDone: 0, bytesTotal: 0, finished: false })
+  const madeDirs = new Set<string>()
   for (let i = 0; i < ovEntries.length; i++) {
     const e = ovEntries[i]
     const rel = e.entryName.slice('overrides/'.length)
     const dest = safeJoin(vdir, rel)
     if (dest) {
-      ensureDir(dirname(dest))
+      const dir = dirname(dest)
+      if (!madeDirs.has(dir)) {
+        ensureDir(dir)
+        madeDirs.add(dir)
+      }
       await fs.writeFile(dest, e.getData())
     }
     if (i % 20 === 0) {

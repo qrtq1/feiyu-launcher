@@ -47,46 +47,52 @@ function GrassBlock() {
 export default function Home() {
   const {
     localVersions, selectedVersion, setSelectedVersion, pinnedVersions, togglePin,
-    active, status, statuses, launchProgress, launch, stop, launching, stopping, launchError, installing, progress,
+    active, statuses, launchProgress, launch, stop, launching, stopping, launchError, installing, progress,
     setPage, setLogOpen, openInstance, toast, reloadLocal, setDownloadsTab, saveSettings
   } = useApp()
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [javaPrompt, setJavaPrompt] = useState<{ need: number; versionId: string; accountId: string } | null>(null)
+  const javaPromptRef = useRef(javaPrompt)
+  javaPromptRef.current = javaPrompt
+  const [javaBusy, setJavaBusy] = useState(false)
   /** 启动器打开时先看一眼这台机器有没有 Java */
   const [noJava, setNoJava] = useState(false)
 
   useEffect(() => {
+    let on = true
     void (async () => {
       try {
         const list = await window.api.java.list()
-        setNoJava(list.length === 0)
+        if (on) setNoJava(list.length === 0)
       } catch {
         /* 探测失败就当有，别拿这个拦用户 */
       }
     })()
+    return () => {
+      on = false
+    }
   }, [])
-  const stopDialog = useRef<HTMLDialogElement>(null)
-  /** 同一个实例可以开多份，这里数它现在跑了几个 */
-  const runningOf = (id: string): LaunchStatus[] =>
-    Object.values(statuses).filter((s) => s.running && s.versionId === id)
-  const selectedRunningList = runningOf(selectedVersion)
+  const runningByVersion = useMemo(() => {
+    const groups = new Map<string, LaunchStatus[]>()
+    for (const status of Object.values(statuses)) {
+      if (!status.running || status.versionId === undefined) continue
+      const group = groups.get(status.versionId)
+      if (group) group.push(status)
+      else groups.set(status.versionId, [status])
+    }
+    return groups
+  }, [statuses])
+  const selectedRunningList = runningByVersion.get(selectedVersion) ?? []
   const selectedRunningCount = selectedRunningList.length
-  const selectedRunning = selectedRunningCount > 0
-  const anyRunning = Object.values(statuses).some((s) => s.running)
-  const running = selectedRunning
+  const running = selectedRunningCount > 0
   const pending = launching || stopping || (installing && !running)
   const selected = localVersions.find((version) => version.id === selectedVersion)
 
-  useEffect(() => {
-    if (!running) stopDialog.current?.close()
-  }, [running])
-
   /** 停止按钮：把当前选中实例跑着的几份都停掉 */
   const stopSelected = async (): Promise<void> => {
-    const list = [...runningOf(selectedVersion)]
-    for (const s of list) {
+    for (const s of selectedRunningList) {
       if (s.launchId) await stop(s.launchId)
     }
   }
@@ -104,17 +110,20 @@ export default function Home() {
     }
   }
 
+  const mainClickRef = useRef<() => void>(() => {})
+  mainClickRef.current = onMainClick
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' || !event.ctrlKey || event.isComposing) return
-      const target = event.target as HTMLElement | null
-      if (target?.matches('input, textarea, select, button')) return
+      const target = event.target
+      if (target instanceof HTMLElement && target.matches('input, textarea, select, button')) return
       event.preventDefault()
-      onMainClick()
+      mainClickRef.current()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  })
+  }, [])
 
   const addFolder = async (): Promise<void> => {
     try {
@@ -162,7 +171,7 @@ export default function Home() {
   const renderInstance = (version: LocalVersion) => {
     const pinned = pins.has(version.id)
     const isSelected = selectedVersion === version.id
-    const mine = runningOf(version.id)
+    const mine = runningByVersion.get(version.id) ?? []
     const isRunning = mine.length > 0
     // 停止按钮停「最近启动的那一份」
     const latest = [...mine].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]
@@ -219,9 +228,14 @@ export default function Home() {
   /** 启动前先确认有能用的 Java；没有就问用户要下载还是手动指定，绝不偷偷下载 */
   async function startWithJavaCheck(versionId: string, accountId: string): Promise<void> {
     const need = selected?.javaVersion ?? 17
-    const hit = await window.api.java.detect(need)
-    if (hit) {
-      void launch(versionId, accountId)
+    try {
+      const hit = await window.api.java.detect(need)
+      if (hit) {
+        void launch(versionId, accountId)
+        return
+      }
+    } catch (e) {
+      toast(`Java 检测失败：${(e as Error).message}`, 'err')
       return
     }
     setJavaPrompt({ need, versionId, accountId })
@@ -232,26 +246,30 @@ export default function Home() {
     const p = await window.api.settings.pickJava()
     if (!p) return
     await saveSettings({ javaPath: p })
-    const target = javaPrompt
+    const target = javaPromptRef.current
     setJavaPrompt(null)
     if (target) void launch(target.versionId, target.accountId)
   }
 
   /** 用户选「下载」：下载对应版本的运行时，成功后再启动 */
   async function downloadJavaForLaunch(): Promise<void> {
+    if (javaBusy) return
     if (!javaPrompt) return
     const need = javaPrompt.need
     toast(`开始下载 Java ${need}，可能要几分钟…`)
+    setJavaBusy(true)
     try {
       await window.api.java.download('', need)
       const hit = await window.api.java.detect(need)
       if (!hit) throw new Error('下载完成但没检测到，去设置里手动指定试试')
       toast(`Java ${need} 已就绪`, 'ok')
-      const target = javaPrompt
+      const target = javaPromptRef.current
       setJavaPrompt(null)
       if (target) void launch(target.versionId, target.accountId)
     } catch (e) {
       toast(`下载失败：${(e as Error).message}`, 'err')
+    } finally {
+      setJavaBusy(false)
     }
   }
 
@@ -435,10 +453,10 @@ export default function Home() {
               <button className="ghost-btn" onClick={() => setJavaPrompt(null)}>
                 取消
               </button>
-              <button className="ghost-btn" onClick={() => void pickJavaForLaunch()}>
+              <button className="ghost-btn" disabled={javaBusy} onClick={() => void pickJavaForLaunch()}>
                 手动指定
               </button>
-              <button className="primary-btn" onClick={() => void downloadJavaForLaunch()}>
+              <button className="primary-btn" disabled={javaBusy} onClick={() => void downloadJavaForLaunch()}>
                 <Icon name="download" size={14} /> 下载 Java {javaPrompt.need}
               </button>
             </div>
@@ -446,16 +464,6 @@ export default function Home() {
         </div>
       )}
 
-      <dialog className="home-stop-dialog" ref={stopDialog} aria-labelledby="home-stop-title" aria-describedby="home-stop-note">        <h2 id="home-stop-title">强制停止游戏？</h2>
-        <p id="home-stop-note">强制停止可能导致未保存的进度丢失，甚至损坏存档。建议先在游戏内保存并退出。</p>
-        <div className="modal-actions">
-          <button className="ghost-btn" autoFocus onClick={() => stopDialog.current?.close()}>取消</button>
-          <button className="danger-btn" disabled={!running || stopping} onClick={() => {
-            stopDialog.current?.close()
-            if (running && !stopping) void stop()
-          }}>强制停止</button>
-        </div>
-      </dialog>
     </div>
   )
 }

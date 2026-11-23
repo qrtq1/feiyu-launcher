@@ -1,10 +1,10 @@
 import { existsSync, promises as fs } from 'node:fs'
-import { basename, dirname, join, normalize } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { ResourceHit, WorldMapFile, WorldMapHit } from '../../shared/types'
-import { downloadFile, ensureDir, fetchJson } from './http'
+import { downloadFile, ensureDir, fetchJson, pool } from './http'
 import { installVersion, type InstallContext } from './install'
 import { installLoader, type LoaderType } from './loaders'
-import { P } from './paths'
+import { P, safeJoin } from './paths'
 
 /**
  * 地图（世界存档）下载：Modrinth 没有 world 这一类，只能走 CurseForge 的
@@ -33,6 +33,20 @@ export function cdnUrlFor(file: { id: number; fileName: string }): string {
   const hi = Math.floor(file.id / 1000)
   const lo = file.id % 1000
   return `https://edge.forgecdn.net/files/${hi}/${lo}/${encodeURIComponent(file.fileName)}`
+}
+
+/** CfFile → 统一的 WorldMapFile（三处映射共用） */
+function toWorldMapFile(f: CfFile): WorldMapFile {
+  return {
+    id: f.id,
+    name: f.displayName || f.fileName,
+    fileName: f.fileName,
+    size: f.fileLength ?? 0,
+    date: f.fileDate,
+    gameVersions: f.gameVersions ?? [],
+    // 官方 API 对普通 key 会把 downloadUrl 置空，那就按 CDN 规则自己拼
+    downloadUrl: f.downloadUrl || cdnUrlFor({ id: f.id, fileName: f.fileName })
+  }
 }
 
 export class MissingCurseforgeKey extends Error {
@@ -106,19 +120,8 @@ export async function searchWorldMaps(
 
 /** 某个地图项目的文件列表（优先当前 MC 版本） */
 export async function listWorldMapFiles(modId: number, apiKey: string, gameVersion?: string): Promise<WorldMapFile[]> {
-  const params = new URLSearchParams({ pageSize: '50' })
-  if (gameVersion) params.set('gameVersion', gameVersion)
-  const res = await cfGet<{ data: CfFile[] }>(`/mods/${modId}/files?${params.toString()}`, apiKey)
-  return (res.data ?? []).map((f) => ({
-    id: f.id,
-    name: f.displayName || f.fileName,
-    fileName: f.fileName,
-    size: f.fileLength ?? 0,
-    date: f.fileDate,
-    gameVersions: f.gameVersions ?? [],
-    // 官方 API 对普通 key 会把 downloadUrl 置空，那就按 CDN 规则自己拼
-    downloadUrl: f.downloadUrl || cdnUrlFor({ id: f.id, fileName: f.fileName })
-  }))
+  // 世界只是 CurseForge 的一个类目，逻辑与 listCfFiles 完全相同，直接委托
+  return listCfFiles({ projectId: modId, apiKey, mcVersion: gameVersion })
 }
 
 /**
@@ -147,6 +150,7 @@ export async function extractWorldZip(zipPath: string, savesDir: string, worldNa
   if (existsSync(root)) throw new Error(`存档目录里已经有「${safeName}」了，先删掉或者改个名字`)
 
   let files = 0
+  const madeDirs = new Set<string>()
   for (const e of entries) {
     const full = e.entryName.replace(/\\/g, '/')
     if (prefix && !full.startsWith(prefix)) continue
@@ -154,7 +158,11 @@ export async function extractWorldZip(zipPath: string, savesDir: string, worldNa
     if (!rel || rel.startsWith('../') || rel.includes('/../') || rel.startsWith('/')) continue
     const dest = join(root, rel)
     if (!dest.startsWith(root)) continue
-    await fs.mkdir(dirname(dest), { recursive: true })
+    const dir = dirname(dest)
+    if (!madeDirs.has(dir)) {
+      await fs.mkdir(dir, { recursive: true })
+      madeDirs.add(dir)
+    }
     await fs.writeFile(dest, e.getData())
     files++
   }
@@ -270,15 +278,7 @@ export async function listCfFiles(opts: {
   const loaderType = opts.loader ? LOADER_TYPE[opts.loader] : undefined
   if (loaderType) params.set('modLoaderType', String(loaderType))
   const res = await cfGet<{ data: CfFile[] }>(`/mods/${opts.projectId}/files?${params.toString()}`, opts.apiKey)
-  return (res.data ?? []).map((f) => ({
-    id: f.id,
-    name: f.displayName || f.fileName,
-    fileName: f.fileName,
-    size: f.fileLength ?? 0,
-    date: f.fileDate,
-    gameVersions: f.gameVersions ?? [],
-    downloadUrl: f.downloadUrl || cdnUrlFor({ id: f.id, fileName: f.fileName })
-  }))
+  return (res.data ?? []).map(toWorldMapFile)
 }
 
 /** 单个文件信息（整合包 manifest 里只有 fileID，需要回查文件名） */
@@ -286,15 +286,7 @@ export async function getCfFile(opts: { projectId: number; fileId: number; apiKe
   const res = await cfGet<{ data: CfFile }>(`/mods/${opts.projectId}/files/${opts.fileId}`, opts.apiKey)
   const f = res.data
   if (!f) throw new Error(`找不到文件 ${opts.fileId}`)
-  return {
-    id: f.id,
-    name: f.displayName || f.fileName,
-    fileName: f.fileName,
-    size: f.fileLength ?? 0,
-    date: f.fileDate,
-    gameVersions: f.gameVersions ?? [],
-    downloadUrl: f.downloadUrl || cdnUrlFor({ id: f.id, fileName: f.fileName })
-  }
+  return toWorldMapFile(f)
 }
 
 // ---------------- CurseForge 整合包 ----------------
@@ -305,13 +297,6 @@ interface CfManifest {
   version: string
   files: { projectID: number; fileID: number; required?: boolean }[]
   overrides?: string
-}
-
-/** 把相对路径安全映射到版本目录下 */
-function safeJoin(base: string, rel: string): string | null {
-  const p = normalize(rel).replace(/\\/g, '/')
-  if (p.startsWith('..') || p.includes('/../') || p.startsWith('/') || /^[a-zA-Z]:/.test(p)) return null
-  return join(base, p)
 }
 
 /** `forge-47.2.0` / `fabric-0.15.11` / `neoforge-21.1.0` / `quilt-0.24.0` → { type, version } */
@@ -362,7 +347,7 @@ export async function installCfModpackZip(
   // 2) 原版 + 加载器
   if (!existsSync(P.versionJson(mc))) {
     ctx.onProgress({ taskId: ctx.taskId, phase: '安装整合包基底', current: 0, total: 1, bytesDone: 0, bytesTotal: 0, finished: false, currentFile: `Minecraft ${mc}` })
-    await installVersion(mc, { ...ctx })
+    await installVersion(mc, ctx)
   }
   const primary = manifest.minecraft.modLoaders?.find((l) => l.primary) ?? manifest.minecraft.modLoaders?.[0]
   let versionId = mc
@@ -373,7 +358,7 @@ export async function installCfModpackZip(
     if (parsed) {
       loader = parsed.type
       loaderVersion = parsed.version
-      const r = await installLoader(loader, mc, loaderVersion, { ...ctx })
+      const r = await installLoader(loader, mc, loaderVersion, ctx)
       versionId = r.versionId
     }
   }
@@ -385,7 +370,10 @@ export async function installCfModpackZip(
   let done = 0
   ctx.onProgress({ taskId: ctx.taskId, phase: '下载整合包文件', current: 0, total: list.length, bytesDone: 0, bytesTotal: 0, finished: false })
   const failed: string[] = []
-  for (const item of list) {
+  // 并发回查+下载：几百个 mod 串行就是几百个 RTT。并发压 4 防 CF 限流；
+  // 错误按 manifest 原顺序收集，failed 列表与串行版一致
+  const errors = new Array<string | null>(list.length).fill(null)
+  await pool(list, 4, async (item, i) => {
     if (ctx.isCancelled()) throw new Error('已取消')
     try {
       const f = await getCfFile({ projectId: item.projectID, fileId: item.fileID, apiKey: opts.apiKey })
@@ -395,13 +383,14 @@ export async function installCfModpackZip(
         await downloadFile(f.downloadUrl, dest, { size: f.size || undefined, retries: 3, timeout: 300000 })
       }
     } catch (e) {
-      failed.push(`${item.projectID}/${item.fileID}: ${(e as Error).message}`)
+      errors[i] = `${item.projectID}/${item.fileID}: ${(e as Error).message}`
     }
     done++
     if (done % 5 === 0 || done === list.length) {
       ctx.onProgress({ taskId: ctx.taskId, phase: '下载整合包文件', current: done, total: list.length, bytesDone: 0, bytesTotal: 0, finished: false })
     }
-  }
+  })
+  for (const e of errors) if (e) failed.push(e)
 
   // 4) overrides
   const ovPrefix = `${manifest.overrides ?? 'overrides'}/`

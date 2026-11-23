@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { closeSync, existsSync, openSync, promises as fs, writeSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { fetchJson, downloadFile, ensureDir, pool, sleep } from './http'
+import { fetchJson, downloadFile, ensureDir, pool } from './http'
 import { installVersion, type InstallContext } from './install'
-import { getVersionJson, rewriteUrl, setDownloadSource } from './manifest'
+import { getVersionJson } from './manifest'
 import { P, ensureGameDirs } from './paths'
 
 export type LoaderType = 'fabric' | 'quilt' | 'forge' | 'neoforge' | 'optifine' | 'legacyfabric'
@@ -159,7 +159,7 @@ async function installFabricLike(type: 'fabric' | 'quilt' | 'legacyfabric', mc: 
   ctx.onProgress({ taskId: ctx.taskId, phase: '获取加载器配置', current: 1, total: 1, bytesDone: 0, bytesTotal: 0, finished: false })
 
   // 复用通用安装流程：它会顺着 inheritsFrom 把父版本和加载器的库都下齐
-  await installVersion(id, { ...ctx, taskId: ctx.taskId })
+  await installVersion(id, ctx)
 
   // Fabric 家族顺手补一份 API —— 大多数模组没有它就直接不工作
   const apiSlug = type === 'legacyfabric' ? 'legacy-fabric-api' : type === 'fabric' ? 'fabric-api' : null
@@ -192,7 +192,7 @@ async function runJavaJar(java: string, jar: string, args: string[], logFile: st
   const fd = openSync(logFile, 'w')
   const header = `[启动器] ${java} -jar ${jar} ${args.join(' ')}\n`
   let offset = writeSync(fd, header)
-  let child
+  let child: ChildProcess
   try {
     child = spawn(java, ['-jar', jar, ...args], { stdio: ['ignore', fd, fd], windowsHide: true })
   } finally {
@@ -203,18 +203,21 @@ async function runJavaJar(java: string, jar: string, args: string[], logFile: st
     }
   }
   let buf = ''
-  const drain = (): void => {
+  let draining = false
+  // 异步读日志：installer 一跑几分钟，别每 200ms 在主线程做同步 I/O
+  const drain = async (): Promise<void> => {
+    if (draining) return
+    draining = true
     try {
-      const { statSync, readSync } = require('node:fs') as typeof import('node:fs')
-      const st = statSync(logFile)
+      const st = await fs.stat(logFile)
       if (st.size <= offset) return
       const len = st.size - offset
       const b = Buffer.alloc(len)
-      const rfd = openSync(logFile, 'r')
+      const rfd = await fs.open(logFile, 'r')
       try {
-        readSync(rfd, b, 0, len, offset)
+        await rfd.read(b, 0, len, offset)
       } finally {
-        closeSync(rfd)
+        await rfd.close()
       }
       offset = st.size
       buf += b.toString('utf8')
@@ -223,9 +226,11 @@ async function runJavaJar(java: string, jar: string, args: string[], logFile: st
       for (const l of lines) if (l.trim()) onLine?.(l)
     } catch {
       /* ignore */
+    } finally {
+      draining = false
     }
   }
-  const timer = setInterval(drain, 200)
+  const timer = setInterval(() => void drain(), 200)
   return new Promise<number>((resolve) => {
     child.on('error', () => {
       clearInterval(timer)
@@ -234,8 +239,7 @@ async function runJavaJar(java: string, jar: string, args: string[], logFile: st
     child.on('exit', (code) => {
       clearInterval(timer)
       setTimeout(() => {
-        drain()
-        resolve(code ?? 0)
+        void drain().then(() => resolve(code ?? 0))
       }, 200)
     })
   })
@@ -332,6 +336,7 @@ async function prefetchInstallerLibraries(jar: string, ctx: InstallContext): Pro
   emit()
   // 并发压低一点：BMCLAPI 的 maven 并发高了容易超时
   await pool(jobs, 4, async (job) => {
+    if (ctx.isCancelled()) throw new Error('已取消')
     const ok = await fetchOne(job)
     if (!ok) failed++
     done++
@@ -342,7 +347,7 @@ async function prefetchInstallerLibraries(jar: string, ctx: InstallContext): Pro
   if (failed > 0) {
     const retryJobs = jobs.filter((j) => !existsSync(join(P.libraries, j.path)))
     for (const job of retryJobs) {
-      if (await fetchOne(job)) failed--
+      await fetchOne(job)
     }
   }
 }
@@ -521,7 +526,7 @@ async function installOptiFine(mc: string, optiVersion: string, ctx: InstallCont
   }
   ensureDir(P.versionDir(id))
   await fs.writeFile(P.versionJson(id), JSON.stringify(merged, null, 2))
-  await installVersion(id, { ...ctx, taskId: ctx.taskId })
+  await installVersion(id, ctx)
   return id
 }
 
@@ -538,7 +543,7 @@ export async function installLoader(
   // 装加载器之前，父版本必须完整
   if (!existsSync(P.versionJson(mcVersion))) {
     ctx.onProgress({ taskId: ctx.taskId, phase: '安装父版本', current: 0, total: 1, bytesDone: 0, bytesTotal: 0, finished: false, currentFile: mcVersion })
-    await installVersion(mcVersion, { ...ctx, taskId: ctx.taskId })
+    await installVersion(mcVersion, ctx)
   }
 
   let versionId = ''
@@ -581,4 +586,3 @@ export async function listInstalledLoaders(): Promise<{ versionId: string; type:
   return out
 }
 
-export { sleep, setDownloadSource, rewriteUrl }

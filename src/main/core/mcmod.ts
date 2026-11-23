@@ -51,7 +51,6 @@ export async function searchMcmod(query: string, limit = 12): Promise<McmodHit[]
 
     const bodyMatch = block.match(/<div class="body">([\s\S]*?)<\/div>/)
     const desc = bodyMatch ? stripTags(bodyMatch[1]).replace(/^\[[^\]]*\]\s*/, '') : ''
-    const catMatch = block.match(/<a class="c_\d+"[^>]*>/)
     const { title, enName } = splitTitle(rawTitle)
 
     out.push({
@@ -60,18 +59,9 @@ export async function searchMcmod(query: string, limit = 12): Promise<McmodHit[]
       enName,
       url,
       desc: desc.slice(0, 160),
-      category: catMatch ? 'mcmod' : undefined
+      category: /<a class="c_\d+"/.test(block) ? 'mcmod' : undefined
     })
   }
   return out
 }
 
-/** 把「钠 (Sodium)」这种和 Modrinth 的标题对齐，用于去重 */
-export function normalizeName(s: string | undefined): string {
-  if (!s) return ''
-  return s
-    .toLowerCase()
-    .replace(/[（(].*?[）)]/g, '')
-    .replace(/[\s._-]+/g, '')
-    .replace(/[^\w\u4e00-\u9fff]/g, '')
-}

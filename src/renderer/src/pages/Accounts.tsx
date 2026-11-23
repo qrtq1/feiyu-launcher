@@ -12,6 +12,7 @@ export default function Accounts() {
   const [busy, setBusy] = useState(false)
 
   const addOffline = async (): Promise<void> => {
+    if (busy) return
     setBusy(true)
     try {
       const acc = await window.api.accounts.addOffline(offlineName)
@@ -27,15 +28,23 @@ export default function Accounts() {
   }
 
   const remove = async (a: Account): Promise<void> => {
-    await window.api.accounts.remove(a.id)
-    await reloadAccounts()
-    toast(`已移除 ${a.name}`)
+    try {
+      await window.api.accounts.remove(a.id)
+      await reloadAccounts()
+      toast(`已移除 ${a.name}`)
+    } catch (e) {
+      toast((e as Error).message, 'err')
+    }
   }
 
   const setActive = async (a: Account): Promise<void> => {
-    await window.api.accounts.setActive(a.id)
-    await reloadAccounts()
-    toast(`当前账号切换为 ${a.name}`, 'ok')
+    try {
+      await window.api.accounts.setActive(a.id)
+      await reloadAccounts()
+      toast(`当前账号切换为 ${a.name}`, 'ok')
+    } catch (e) {
+      toast((e as Error).message, 'err')
+    }
   }
 
   const refreshMs = async (a: Account): Promise<void> => {
@@ -179,9 +188,9 @@ function AuthlibLogin({ onClose, onDone }: { onClose: () => void; onDone: () => 
       toast(`外置账号 ${acc.name} 登录成功`, 'ok')
       onDone()
       onClose()
+      return
     } catch (e) {
       setError((e as Error).message)
-    } finally {
       setBusy(false)
     }
   }
@@ -227,38 +236,48 @@ function MicrosoftLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
   const [state, setState] = useState<'starting' | 'waiting' | 'done' | 'error'>('starting')
   const [message, setMessage] = useState('')
   const timer = useRef<number | null>(null)
+  const closeTimer = useRef<number | null>(null)
   const stopped = useRef(false)
+  const cbRef = useRef({ onDone, onClose })
+  cbRef.current = { onDone, onClose }
 
   useEffect(() => {
+    let alive = true
     void (async () => {
       try {
         const d = await window.api.accounts.msStart()
+        if (!alive) return
         setInfo(d)
         setState('waiting')
         void window.api.openExternal(d.verificationUri)
       } catch (e) {
+        if (!alive) return
         setState('error')
         setMessage((e as Error).message)
       }
     })()
     return () => {
+      alive = false
       stopped.current = true
       if (timer.current) window.clearTimeout(timer.current)
+      if (closeTimer.current) window.clearTimeout(closeTimer.current)
     }
   }, [])
 
   useEffect(() => {
     if (!info || state !== 'waiting') return
+    stopped.current = false
     let delay = info.interval * 1000
     const tick = async (): Promise<void> => {
       if (stopped.current) return
       try {
         const r = await window.api.accounts.msPoll(info.deviceCode)
+        if (stopped.current) return
         if (r.status === 'done') {
           setState('done')
           setMessage(`欢迎，${r.account?.name ?? ''}`)
-          onDone()
-          setTimeout(onClose, 1600)
+          cbRef.current.onDone()
+          closeTimer.current = window.setTimeout(() => cbRef.current.onClose(), 1600)
           return
         }
         if (r.status === 'error') {
@@ -268,6 +287,7 @@ function MicrosoftLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
         }
         if (r.message === 'slow_down') delay += 5000
       } catch (e) {
+        if (stopped.current) return
         setState('error')
         setMessage((e as Error).message)
         return
@@ -278,7 +298,7 @@ function MicrosoftLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
     return () => {
       if (timer.current) window.clearTimeout(timer.current)
     }
-  }, [info, state, onDone, onClose])
+  }, [info, state])
 
   const copy = async (): Promise<void> => {
     if (!info) return

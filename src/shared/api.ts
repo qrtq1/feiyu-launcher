@@ -75,6 +75,18 @@ export const IPC = {
   windowMin: 'window:min',
   windowMax: 'window:max',
   windowClose: 'window:close',
+  resolveMedia: 'media:resolve',
+  mpStatus: 'mp:status',
+  mpAgree: 'mp:agree',
+  mpInstall: 'mp:install',
+  mpStart: 'mp:start',
+  mpHost: 'mp:host',
+  mpJoin: 'mp:join',
+  mpLeave: 'mp:leave',
+  mpStop: 'mp:stop',
+  mpState: 'mp:state',
+  mpLog: 'mp:log',
+  mpOpenDir: 'mp:openDir',
   evProgress: 'ev:progress',
   evLaunchProgress: 'ev:launchProgress',
   evLog: 'ev:log',
@@ -96,7 +108,10 @@ export const DEFAULT_SETTINGS: Omit<Settings, 'gameDir'> = {
   versionIsolation: true,
   fullscreen: false,
   closeOnLaunch: false,
-  msaClientId: ''
+  msaClientId: '',
+  backgroundPath: '',
+  backgroundKind: 'none',
+  accentColor: '#1663bc'
 }
 
 export type {

@@ -32,3 +32,11 @@ test('assertSafeVersionId 放行真实存在的 id 形状', () => {
   assert.equal(assertSafeVersionId('fabric-loader-0.20.1-1.20.1'), 'fabric-loader-0.20.1-1.20.1')
   assert.equal(assertSafeVersionId('改名测试实例'), '改名测试实例')
 })
+
+test('assertSafeVersionId 挡住 Windows 保留字符 / 设备名 / 尾随点', () => {
+  assert.throws(() => assertSafeVersionId('a:b'))
+  assert.throws(() => assertSafeVersionId('CON'))
+  assert.throws(() => assertSafeVersionId('com1'))
+  assert.throws(() => assertSafeVersionId('x.'))
+  assert.throws(() => assertSafeVersionId('a<b'))
+})

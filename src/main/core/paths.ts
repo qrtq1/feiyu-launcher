@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 
 /**
  * 目录约定（Minecraft 标准布局）：
@@ -161,7 +161,11 @@ export function isInside(root: string, p: string): boolean {
  * 渲染进程传来的 id 必须先过这里，否则 `..\..\xxx` 就能删到游戏目录外面去。
  */
 export function assertSafeVersionId(id: string): string {
-  if (!id || id === '.' || id === '..' || /[\\/]/.test(id) || id.includes('..') || id !== id.trim()) {
+  if (
+    !id || id === '.' || id === '..' || /[\\/]/.test(id) || id.includes('..') || id !== id.trim() ||
+    // Windows 保留字符 / 设备名 / 尾随点：拼进路径会被系统规范化或指向设备
+    /[<>:"|?*\x00-\x1f]/.test(id) || /^(CON|PRN|AUX|NUL|COM\d|LPT\d)$/i.test(id) || /[. ]$/.test(id)
+  ) {
     throw new Error(`非法的版本 id：${JSON.stringify(id)}`)
   }
   return id
@@ -176,4 +180,11 @@ export function assertInsideData(p: string, action: string): string {
     throw new Error(`拒绝${action}游戏目录之外的路径：${p}`)
   }
   return p
+}
+
+/** 把相对路径安全映射到 base 目录下；穿越 / 绝对 / 盘符路径返回 null（整合包解包共用） */
+export function safeJoin(base: string, rel: string): string | null {
+  const p = normalize(rel).replace(/\\/g, '/')
+  if (p.startsWith('..') || p.includes('/../') || p.startsWith('/') || /^[a-zA-Z]:/.test(p)) return null
+  return join(base, p)
 }

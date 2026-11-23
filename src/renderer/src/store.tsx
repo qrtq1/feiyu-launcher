@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Account, DownloadProgress, LaunchProgress, LaunchStatus, LocalVersion, LogLine, Settings } from '../../shared/types'
 
-type Page = 'home' | 'versions' | 'downloads' | 'accounts' | 'settings' | 'instance'
+type Page = 'home' | 'downloads' | 'multiplayer' | 'accounts' | 'settings' | 'instance'
 
 interface Toast {
   id: number
@@ -38,7 +38,7 @@ interface AppCtx {
   status: LaunchStatus
   /** 每个实例各自的运行状态（多开时用） */
   statuses: Record<string, LaunchStatus>
-  logs: LogLine[]
+  logs: (LogLine & { id: number })[]
   clearLogs: () => void
   launch: (versionId: string, accountId: string) => Promise<void>
   stop: (launchId?: string) => Promise<void>
@@ -46,7 +46,6 @@ interface AppCtx {
   toasts: Toast[]
   logOpen: boolean
   setLogOpen: (v: boolean) => void
-  showLog: () => void
   instanceId: string
   openInstance: (id: string) => void
 }
@@ -97,15 +96,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /** 每个实例的启动状态（支持多开） */
   const [statuses, setStatuses] = useState<Record<string, LaunchStatus>>({})
   const [launchProgress, setLaunchProgress] = useState<Record<string, LaunchProgress>>({})
-  const [logs, setLogs] = useState<LogLine[]>([])
+  const [logs, setLogs] = useState<(LogLine & { id: number })[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
   const [logOpen, setLogOpen] = useState(false)
   const [instanceId, setInstanceId] = useState('')
   const toastId = useRef(0)
+  const logSeq = useRef(0)
   const installBusy = useRef(false)
-  const stoppingRef = useRef(false)
   const stoppingIds = useRef<Set<string>>(new Set())
-  const launchingRef = useRef(false)
   /** 正在启动中的 versionId，防止同一个实例被连点两次起两个进程 */
   const launchingIds = useRef<Set<string>>(new Set())
   const statusReceived = useRef(false)
@@ -134,8 +132,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLocalVersions(list)
     setSelectedVersion((prev) => {
       if (prev && list.some((v) => v.id === prev)) return prev
-      const complete = list.filter((v) => v.complete)
-      return complete[0]?.id ?? list[0]?.id ?? ''
+      return list.find((v) => v.complete)?.id ?? list[0]?.id ?? ''
     })
   }, [])
 
@@ -168,7 +165,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })
     const off2 = window.api.onLog((l) => {
-      setLogs((prev) => (prev.length >= MAX_LOGS ? [...prev.slice(-MAX_LOGS + 1), l] : [...prev, l]))
+      const line = { ...l, id: ++logSeq.current }
+      setLogs((prev) => (prev.length >= MAX_LOGS ? [...prev.slice(-MAX_LOGS + 1), line] : [...prev, line]))
     })
     const off3 = window.api.onStatus((s) => {
       statusReceived.current = true
@@ -244,9 +242,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const launch = useCallback(
     async (versionId: string, accountId: string) => {
       // per-实例防重入：同一瞬间连点两次也只会起一个进程
-      if (launchingIds.current.has(versionId) || stoppingIds.current.size > 0 && stoppingIds.current.has(versionId)) return
+      if (launchingIds.current.has(versionId) || stoppingIds.current.has(versionId)) return
       launchingIds.current.add(versionId)
-      launchingRef.current = true
       setLaunching(true)
       setLaunchError(null)
       setLogs([])
@@ -256,11 +253,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const message = (e as Error).message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
         const text = `启动失败：${message}`
         setLaunchError(text)
-        setLogs((prev) => [...prev.slice(-MAX_LOGS + 1), { stream: 'launcher', line: text, ts: Date.now() }])
+        setLogs((prev) => [...prev.slice(-MAX_LOGS + 1), { stream: 'launcher', line: text, ts: Date.now(), id: ++logSeq.current }])
         toast(text, 'err')
       } finally {
         launchingIds.current.delete(versionId)
-        launchingRef.current = launchingIds.current.size > 0
         setLaunching(launchingIds.current.size > 0)
       }
     },
@@ -272,13 +268,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const target = launchId ?? status.launchId
       if (!target || stoppingIds.current.has(target)) return
       stoppingIds.current.add(target)
-      stoppingRef.current = true
       setStopping(true)
       try {
         await window.api.launch.stop(target)
       } catch (e) {
         stoppingIds.current.delete(target)
-        stoppingRef.current = stoppingIds.current.size > 0
         setStopping(stoppingIds.current.size > 0)
         toast(`无法停止游戏：${(e as Error).message}`, 'err')
       }
@@ -287,7 +281,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   const clearLogs = useCallback(() => setLogs([]), [])
-  const showLog = useCallback(() => setLogOpen(true), [])
   const openInstance = useCallback((id: string) => {
     setInstanceId(id)
     setPage('instance')
@@ -328,7 +321,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toasts,
       logOpen,
       setLogOpen,
-      showLog,
       instanceId,
       openInstance
     }),
@@ -362,7 +354,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       toasts,
       logOpen,
-      showLog,
       instanceId,
       openInstance
     ]

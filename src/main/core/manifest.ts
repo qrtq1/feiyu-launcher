@@ -1,5 +1,5 @@
 import { existsSync, promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { VersionJson, VersionManifest } from '../../shared/types'
 import { dataRoot, P } from './paths'
 import { downloadFile, fetchJson, retry } from './http'
@@ -57,9 +57,17 @@ async function probe(url: string): Promise<ProbeResult> {
  * - 吞吐差 15% 以内视为持平，改比响应延迟，避免来回抖
  * - 结果缓存 10 分钟
  */
+let probing: Promise<'official' | 'bmclapi'> | null = null
+
 export async function ensureEffectiveSource(): Promise<'official' | 'bmclapi'> {
   if (sourceMode !== 'auto') return sourceMode
   if (Date.now() - probedAt < PROBE_TTL_MS) return effective
+  // 并发调用共享同一次测速，别各自下载两份 manifest
+  if (!probing) probing = probeBoth().finally(() => { probing = null })
+  return probing
+}
+
+async function probeBoth(): Promise<'official' | 'bmclapi'> {
   const [off, mir] = await Promise.all([probe(OFFICIAL_MANIFEST), probe(MIRROR_MANIFEST)])
   let picked: 'official' | 'bmclapi'
   if (off.ok && !mir.ok) picked = 'official'
@@ -78,20 +86,22 @@ export async function ensureEffectiveSource(): Promise<'official' | 'bmclapi'> {
   return effective
 }
 
+/** 官方域名 → BMCLAPI 镜像的映射表（模块级常量，避免每次改写都重建数组） */
+const MIRROR_MAP: [RegExp, string][] = [
+  [/^https:\/\/launchermeta\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
+  [/^https:\/\/piston-meta\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
+  [/^https:\/\/piston-data\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
+  [/^https:\/\/launcher\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
+  [/^https:\/\/resources\.download\.minecraft\.net/, 'https://bmclapi2.bangbang93.com/assets'],
+  [/^https:\/\/libraries\.minecraft\.net/, 'https://bmclapi2.bangbang93.com/maven'],
+  [/^https:\/\/files\.minecraftforge\.net\/maven/, 'https://bmclapi2.bangbang93.com/maven'],
+  [/^https:\/\/maven\.fabricmc\.net/, 'https://bmclapi2.bangbang93.com/maven']
+]
+
 /** 按指定的源改写 URL（不传就用当前生效的源） */
 export function rewriteUrlAs(url: string, which: 'official' | 'bmclapi' = effective): string {
   if (which !== 'bmclapi') return url
-  const map: [RegExp, string][] = [
-    [/^https:\/\/launchermeta\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
-    [/^https:\/\/piston-meta\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
-    [/^https:\/\/piston-data\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
-    [/^https:\/\/launcher\.mojang\.com/, 'https://bmclapi2.bangbang93.com'],
-    [/^https:\/\/resources\.download\.minecraft\.net/, 'https://bmclapi2.bangbang93.com/assets'],
-    [/^https:\/\/libraries\.minecraft\.net/, 'https://bmclapi2.bangbang93.com/maven'],
-    [/^https:\/\/files\.minecraftforge\.net\/maven/, 'https://bmclapi2.bangbang93.com/maven'],
-    [/^https:\/\/maven\.fabricmc\.net/, 'https://bmclapi2.bangbang93.com/maven']
-  ]
-  for (const [re, rep] of map) if (re.test(url)) return url.replace(re, rep)
+  for (const [re, rep] of MIRROR_MAP) if (re.test(url)) return url.replace(re, rep)
   return url
 }
 
@@ -119,22 +129,45 @@ interface CachedManifest {
 
 const MANIFEST_TTL = 10 * 60 * 1000
 
+/** 解析结果的内存缓存：缓存文件 mtime/size 没变就不必重读重 parse 这份 ~1MB 的 JSON */
+let manifestMem: { mtimeMs: number; size: number; fetchedAt: number; data: VersionManifest } | null = null
+/** 进行中的拉取：并发调用共享一次网络请求 */
+let manifestInflight: Promise<VersionManifest> | null = null
+
 export async function getVersionManifest(force = false): Promise<VersionManifest> {
   const file = join(cacheDir(), 'version_manifest_v2.json')
   if (!force && existsSync(file)) {
     try {
+      const st = await fs.stat(file)
+      if (
+        manifestMem && manifestMem.mtimeMs === st.mtimeMs && manifestMem.size === st.size &&
+        Date.now() - manifestMem.fetchedAt < MANIFEST_TTL && manifestMem.data?.versions?.length
+      ) {
+        return manifestMem.data
+      }
       const cached = JSON.parse(await fs.readFile(file, 'utf8')) as CachedManifest
-      if (Date.now() - cached.fetchedAt < MANIFEST_TTL && cached.data?.versions?.length) return cached.data
+      if (Date.now() - cached.fetchedAt < MANIFEST_TTL && cached.data?.versions?.length) {
+        manifestMem = { mtimeMs: st.mtimeMs, size: st.size, fetchedAt: cached.fetchedAt, data: cached.data }
+        return cached.data
+      }
     } catch {
       /* 缓存坏了就重新拉 */
     }
   }
-  const data = await retry(async () => {
-    const url = rewriteUrl(OFFICIAL_MANIFEST)
-    return fetchJson<VersionManifest>(url, { timeout: 30000 })
-  }, 3, 1000)
-  await fs.writeFile(file, JSON.stringify({ fetchedAt: Date.now(), data })).catch(() => {})
-  return data
+  if (!manifestInflight) {
+    manifestInflight = (async () => {
+      const data = await retry(async () => {
+        const url = rewriteUrl(OFFICIAL_MANIFEST)
+        return fetchJson<VersionManifest>(url, { timeout: 30000 })
+      }, 3, 1000)
+      // 目录必须先建好再写盘，否则首次运行缓存会静默写不进去
+      await fs.mkdir(dirname(file), { recursive: true }).catch(() => {})
+      await fs.writeFile(file, JSON.stringify({ fetchedAt: Date.now(), data })).catch(() => {})
+      manifestMem = null
+      return data
+    })().finally(() => { manifestInflight = null })
+  }
+  return manifestInflight
 }
 
 export async function findVersionEntry(id: string): Promise<{ url: string; sha1: string } | null> {
@@ -176,7 +209,7 @@ export async function getResolvedVersionJson(id: string): Promise<VersionJson> {
   if (chain.length === 1) return chain[0]
 
   // 从最抽象的（父版本）开始，逐层被子版本覆盖
-  const merged: VersionJson = JSON.parse(JSON.stringify(chain[0]))
+  const merged: VersionJson = structuredClone(chain[0])
   for (const part of chain.slice(1)) {
     if (part.id) merged.id = part.id
     if (part.type) merged.type = part.type

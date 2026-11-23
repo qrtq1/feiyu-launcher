@@ -1,28 +1,28 @@
 import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { WorldSave } from '../../shared/types'
-import { P } from './paths'
+import { assertInsideData, P } from './paths'
 import { dirSize } from './install'
+import { pool } from './http'
 
 async function scanDir(dir: string): Promise<WorldSave[]> {
   if (!existsSync(dir)) return []
   const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
-  const out: WorldSave[] = []
-  for (const it of items) {
-    if (!it.isDirectory()) continue
+  // 只认带 level.dat 的目录
+  const worlds = items.filter((it) => it.isDirectory() && existsSync(join(dir, it.name, 'level.dat')))
+  // 存档可能很大，目录大小并发算；pool 保证按原顺序回填，排序规则不变
+  const out = await pool(worlds, 4, async (it): Promise<WorldSave> => {
     const full = join(dir, it.name)
-    // 只认带 level.dat 的目录
-    if (!existsSync(join(full, 'level.dat'))) continue
     const st = await fs.stat(full).catch(() => null)
     const size = await dirSize(full).catch(() => 0)
-    out.push({
+    return {
       name: it.name,
       folder: it.name,
       path: full,
       sizeBytes: size,
       lastPlayed: st?.mtimeMs
-    })
-  }
+    }
+  })
   return out.sort((a, b) => (b.lastPlayed ?? 0) - (a.lastPlayed ?? 0))
 }
 
@@ -45,6 +45,9 @@ export async function listWorlds(versionId?: string, isolated = true): Promise<W
 }
 
 export async function deleteWorld(path: string): Promise<void> {
-  if (!path || !existsSync(path)) return
+  if (!path) return
+  // IPC 层已有闸；这里复验一次做纵深防御，未来新增调用点也不漏
+  assertInsideData(path, '删除')
+  if (!existsSync(path)) return
   await fs.rm(path, { recursive: true, force: true })
 }

@@ -1,4 +1,3 @@
-import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { ResourceHit, ResourceType, ResourceVersionLite } from '../../shared/resources'
 import { downloadFile, ensureDir, fetchJson } from './http'
@@ -150,22 +149,7 @@ export async function downloadResource(opts: {
     retries: 3,
     onBytes: (n) => opts.onProgress?.(n)
   })
-  void existsSync
-  void fs
   return { file: dest, dir, size: r.bytes }
-}
-
-/** 把 .mrpack 里的 modrinth.index.json 读出来（整合包安装用） */
-export async function readMrpackIndex(mrpackPath: string): Promise<{ files: { path: string; downloads: string[]; hashes?: Record<string, string> }[]; name: string } | null> {
-  const AdmZip = (await import('adm-zip')).default
-  const zip = new AdmZip(mrpackPath)
-  const entry = zip.getEntry('modrinth.index.json')
-  if (!entry) return null
-  const json = JSON.parse(entry.getData().toString('utf8')) as {
-    name?: string
-    files: { path: string; downloads: string[]; hashes?: Record<string, string> }[]
-  }
-  return { files: json.files ?? [], name: json.name ?? 'modpack' }
 }
 
 /**

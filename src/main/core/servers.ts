@@ -15,10 +15,14 @@ export function serversFile(versionId?: string, isolated = true): string {
 
 class Reader {
   off = 0
-  constructor(private buf: Buffer) {}
+  private buf: Buffer
+  // 不用参数属性（constructor(private buf)）：Node 测试的 strip-only 模式不支持该语法
+  constructor(buf: Buffer) {
+    this.buf = buf
+  }
 
   private need(n: number): void {
-    if (this.off + n > this.buf.length) throw new Error('servers.dat 结构不完整')
+    if (n < 0 || this.off + n > this.buf.length) throw new Error('servers.dat 结构不完整')
   }
   u8(): number {
     this.need(1)
@@ -37,7 +41,10 @@ class Reader {
     return v
   }
   str(): string {
-    const n = this.i16()
+    // NBT 字符串长度是无符号 16 位；按有符号读会让 >32KB 的图标变负数，解析崩坏甚至死循环
+    this.need(2)
+    const n = this.buf.readUInt16BE(this.off)
+    this.off += 2
     this.need(n)
     const s = this.buf.subarray(this.off, this.off + n).toString('utf8')
     this.off += n
@@ -135,6 +142,7 @@ export function parseServers(buf: Buffer): ServerEntry[] {
 
 function str(s: string): Buffer {
   const body = Buffer.from(s, 'utf8')
+  if (body.length > 65535) throw new Error('服务器名称或图标太长（NBT 字符串上限 65535 字节）')
   const head = Buffer.alloc(2)
   head.writeUInt16BE(body.length, 0)
   return Buffer.concat([head, body])
@@ -181,14 +189,26 @@ export async function listServers(versionId?: string, isolated = true): Promise<
   }
 }
 
-/** 写回；第一次写之前把原文件留一份 .bak（已存在就不覆盖，保住最初备份） */
+/** 写回；第一次写之前把原文件留一份 .bak（已存在就不覆盖，保住最初备份）。
+ *  tmp+rename 原子落盘：写一半崩溃不会毁掉游戏正在用的 servers.dat */
 async function writeServers(file: string, list: ServerEntry[]): Promise<void> {
   if (existsSync(file)) {
     const bak = `${file}.bak`
     if (!existsSync(bak)) await fs.copyFile(file, bak).catch(() => undefined)
   }
   await fs.mkdir(dirname(file), { recursive: true }).catch(() => undefined)
-  await fs.writeFile(file, buildServers(list))
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  await fs.writeFile(tmp, buildServers(list))
+  await fs.rename(tmp, file)
+}
+
+/** 按文件串行化读-改-写：并发 add/remove 不会互相覆盖丢条目 */
+const serverLocks = new Map<string, Promise<unknown>>()
+function withServerLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const prev = serverLocks.get(file) ?? Promise.resolve()
+  const next = prev.then(fn, fn)
+  serverLocks.set(file, next.catch(() => undefined))
+  return next
 }
 
 export async function addServer(
@@ -198,11 +218,14 @@ export async function addServer(
 ): Promise<ServerEntry[]> {
   const ip = entry.ip.trim()
   if (!ip) throw new Error('地址不能为空')
-  const list = await listServers(versionId, isolated)
-  const next = list.filter((s) => s.ip !== ip)
-  next.push({ name: entry.name.trim() || ip, ip, icon: entry.icon, hidden: entry.hidden })
-  await writeServers(serversFile(versionId, isolated), next)
-  return next
+  const file = serversFile(versionId, isolated)
+  return withServerLock(file, async () => {
+    const list = await listServers(versionId, isolated)
+    const next = list.filter((s) => s.ip !== ip)
+    next.push({ name: entry.name.trim() || ip, ip, icon: entry.icon, hidden: entry.hidden })
+    await writeServers(file, next)
+    return next
+  })
 }
 
 export async function removeServer(
@@ -210,8 +233,11 @@ export async function removeServer(
   isolated: boolean,
   ip: string
 ): Promise<ServerEntry[]> {
-  const list = await listServers(versionId, isolated)
-  const next = list.filter((s) => s.ip !== ip)
-  await writeServers(serversFile(versionId, isolated), next)
-  return next
+  const file = serversFile(versionId, isolated)
+  return withServerLock(file, async () => {
+    const list = await listServers(versionId, isolated)
+    const next = list.filter((s) => s.ip !== ip)
+    await writeServers(file, next)
+    return next
+  })
 }

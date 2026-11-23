@@ -20,6 +20,8 @@ export default function FavoritePane() {
     setLoading(true)
     try {
       setItems(await window.api.favorites.list())
+    } catch (e) {
+      toast((e as Error).message, 'err')
     } finally {
       setLoading(false)
     }
@@ -30,8 +32,12 @@ export default function FavoritePane() {
   }, [])
 
   const remove = async (id: string): Promise<void> => {
-    setItems(await window.api.favorites.remove(id))
-    toast('已取消收藏')
+    try {
+      setItems(await window.api.favorites.remove(id))
+      toast('已取消收藏')
+    } catch (e) {
+      toast((e as Error).message, 'err')
+    }
   }
 
   return (

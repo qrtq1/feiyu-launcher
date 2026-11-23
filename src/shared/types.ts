@@ -132,6 +132,10 @@ export interface Settings {
   fullscreen: boolean
   closeOnLaunch: boolean
   msaClientId: string
+  /** 启动器背景资源；支持图片、视频和 Wallpaper Engine 网页入口 */
+  backgroundPath: string
+  backgroundKind: 'image' | 'video' | 'wallpaper' | 'none'
+  accentColor: string
 }
 
 export interface DownloadProgress {
@@ -242,6 +246,16 @@ export interface VersionStats {
   installedAt?: number
   sizeBytes: number
   lastPlayedAt?: number
+}
+
+/** 版本目录里的 .installed.json 标记：判断「装完了没」以及统计口径 */
+export interface InstalledMark {
+  id: string
+  installedAt: number
+  sizeBytes: number
+  files: number
+  javaMajor?: number
+  source: string
 }
 
 export interface ModFile {
@@ -357,6 +371,50 @@ export interface ResourceVersionLite {
   datePublished: string
   files: ResourceFileRef[]
 }
+// ---------------- 陶瓦联机（Terracotta）----------------
+
+/** 组件自身元信息（GET /meta） */
+export interface TerracottaMeta {
+  version: string
+  [key: string]: unknown
+}
+
+/** 房间成员 */
+export interface TerracottaProfile {
+  machine_id: string
+  name: string
+  /** HOST / LOCAL / GUEST */
+  kind: string
+}
+
+/** 房间状态（GET /state）；index 递增，用来丢弃乱序响应 */
+export interface TerracottaState {
+  index: number
+  /** waiting / host-scanning / host-starting / host-ok / guest-connecting / guest-starting / guest-ok / exception */
+  state: string
+  /** 房间码 */
+  room?: string
+  /** 加入方直连地址 */
+  url?: string
+  /** EASIEST / SIMPLE / MEDIUM / TOUGH */
+  difficulty?: string
+  /** 异常类型序号 */
+  type?: number
+  profiles?: TerracottaProfile[]
+}
+
+/** 启动器侧的联机组件状态 */
+export interface TerracottaStatus {
+  /** 同意协议的时间戳；null = 还没同意 */
+  agreedAt: number | null
+  installed: boolean
+  version?: string
+  running: boolean
+  /** true = 复用别的程序（如 HMCL）已启动的实例 */
+  attached: boolean
+  meta: TerracottaMeta | null
+}
+
 export interface Api {
   platform: () => Promise<{ os: string; arch: string; version: string; userData: string }>
   settings: {
@@ -364,6 +422,8 @@ export interface Api {
     set(patch: Partial<Settings>): Promise<Settings>
     pickDir(): Promise<string | null>
     pickJava(): Promise<string | null>
+    pickBackground(): Promise<{ path: string; kind: 'image' | 'video' | 'wallpaper' } | null>
+    resolveMedia(path: string): Promise<string | null>
   }
   versions: {
     manifest(force?: boolean): Promise<VersionManifest>
@@ -461,6 +521,19 @@ export interface Api {
     setSettings(versionId: string, patch: Partial<VersionSettings>): Promise<VersionSettings>
     openFolder(versionId: string, kind?: InstanceFileKind | 'root'): Promise<void>
     deleteFiles(paths: string[]): Promise<void>
+  }
+  multiplayer: {
+    status(): Promise<TerracottaStatus>
+    agree(): Promise<boolean>
+    install(): Promise<{ version: string }>
+    start(): Promise<void>
+    host(): Promise<void>
+    join(room: string): Promise<void>
+    leave(): Promise<void>
+    stop(): Promise<void>
+    state(): Promise<TerracottaState | null>
+    log(): Promise<string>
+    openDir(): Promise<void>
   }
   onProgress(cb: (p: DownloadProgress) => void): () => void
   onLog(cb: (l: LogLine) => void): () => void

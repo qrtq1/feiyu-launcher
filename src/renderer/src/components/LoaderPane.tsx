@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LoaderType, LoaderVersionInfo } from '../../../shared/types'
 import { useApp } from '../store'
-import { Icon, Spinner, Tag } from './ui'
+import { Icon, Spinner, Tag, cmpMcVersions } from './ui'
 
 /** PCL 里这些加载器都列出来，能自动装的走 installLoader，不能的给出说明 */
 const CAT_LABEL: Record<string, string> = {
@@ -30,27 +30,24 @@ export default function LoaderPane({ type }: { type: string }) {
   const [unsupported, setUnsupported] = useState(false)
   const [installingId, setInstallingId] = useState<string | null>(null)
   const [installed, setInstalled] = useState<{ versionId: string; type: string; mcVersion: string }[]>([])
+  const installedReq = useRef(0)
 
   const mcVersions = useMemo(() => {
-    const cmp = (a: string, b: string): number => {
-      const pa = a.split('.').map(Number)
-      const pb = b.split('.').map(Number)
-      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const x = pa[i] ?? 0
-        const y = pb[i] ?? 0
-        if (x !== y) return x - y
-      }
-      return 0
-    }
     return localVersions
       .filter((v) => v.complete && /^\d+\.\d+(\.\d+)?$/.test(v.id))
       .map((v) => v.id)
-      .sort((a, b) => cmp(b, a))
+      .sort((a, b) => cmpMcVersions(b, a))
   }, [localVersions])
   const mc = mcVersions.includes(selectedVersion) ? selectedVersion : (mcVersions[0] ?? '')
 
   const loadInstalled = async (): Promise<void> => {
-    setInstalled(await window.api.loaders.installed())
+    const req = ++installedReq.current
+    try {
+      const list = await window.api.loaders.installed()
+      if (req === installedReq.current) setInstalled(list)
+    } catch (e) {
+      if (req === installedReq.current) toast((e as Error).message, 'err')
+    }
   }
 
   useEffect(() => {

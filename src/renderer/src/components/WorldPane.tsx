@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { WorldMapFile, WorldMapHit } from '../../../shared/types'
 import { useApp } from '../store'
-import { Icon, Spinner, Tag } from './ui'
+import { Icon, Spinner, Tag, fmtDownloads } from './ui'
 
 /**
  * 下载页「地图」：在线下载世界存档（CurseForge Worlds）+ 导入本地地图包。
@@ -18,20 +18,24 @@ export default function WorldPane() {
   const [files, setFiles] = useState<WorldMapFile[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const seqRef = useRef(0)
+  const fileSeq = useRef(0)
 
   const hasKey = Boolean(settings?.curseforgeApiKey?.trim())
 
   const run = async (): Promise<void> => {
+    const seq = ++seqRef.current
     setLoading(true)
     setError(null)
     try {
       const r = await window.api.maps.search(query)
+      if (seq !== seqRef.current) return
       setHits(r.hits)
       setTotal(r.total)
     } catch (e) {
-      setError((e as Error).message)
+      if (seq === seqRef.current) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current) setLoading(false)
     }
   }
 
@@ -41,17 +45,19 @@ export default function WorldPane() {
   }, [])
 
   const openFiles = async (hit: WorldMapHit): Promise<void> => {
+    const seq = ++fileSeq.current
     setPicked(hit)
     setFilesLoading(true)
     setFiles([])
     try {
       const list = await window.api.maps.files(hit.id, selectedVersion || undefined)
+      if (seq !== fileSeq.current) return
       setFiles(list)
       if (!list.length) toast('这个地图没有匹配当前版本的文件', 'err')
     } catch (e) {
-      toast(`读取文件失败：${(e as Error).message}`, 'err')
+      if (seq === fileSeq.current) toast(`读取文件失败：${(e as Error).message}`, 'err')
     } finally {
-      setFilesLoading(false)
+      if (seq === fileSeq.current) setFilesLoading(false)
     }
   }
 
@@ -61,6 +67,7 @@ export default function WorldPane() {
     try {
       const r = await window.api.maps.download(picked.id, f, selectedVersion || undefined)
       toast(`地图已装进存档：${r.world}`, 'ok')
+      fileSeq.current++
       setPicked(null)
     } catch (e) {
       toast(`下载失败：${(e as Error).message}`, 'err')
@@ -79,8 +86,6 @@ export default function WorldPane() {
     }
   }
 
-  const fmt = (n: number): string => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
-
   return (
     <div className="pane">
       <div className="filter-bar">
@@ -94,7 +99,7 @@ export default function WorldPane() {
               onKeyDown={(e) => e.key === 'Enter' && void run()}
             />
           </div>
-          <button className="primary-btn" onClick={() => void run()}>
+          <button className="primary-btn" onClick={() => void run()} disabled={loading}>
             搜索
           </button>
           <button className="ghost-btn" onClick={() => void importLocal()}>
@@ -147,7 +152,7 @@ export default function WorldPane() {
                     <div className="res-title" title={h.name}>
                       {h.name}
                     </div>
-                    <div className="res-author muted tiny">CurseForge · {fmt(h.downloads)} 下载</div>
+                    <div className="res-author muted tiny">CurseForge · {fmtDownloads(h.downloads)} 下载</div>
                   </div>
                 </div>
                 <div className="res-desc">{h.summary}</div>
@@ -169,7 +174,7 @@ export default function WorldPane() {
       )}
 
       {picked && (
-        <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && setPicked(null)}>
+        <div className="modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) { fileSeq.current++; setPicked(null) } }}>
           <div className="modal" style={{ width: 560 }}>
             <h3>{picked.name}</h3>
             <p className="muted small">选一个文件下载，会解压到当前实例的 saves/ 里。</p>
@@ -199,7 +204,7 @@ export default function WorldPane() {
               </div>
             )}
             <div className="modal-actions">
-              <button className="ghost-btn" onClick={() => setPicked(null)}>
+              <button className="ghost-btn" onClick={() => { fileSeq.current++; setPicked(null) }}>
                 关闭
               </button>
             </div>

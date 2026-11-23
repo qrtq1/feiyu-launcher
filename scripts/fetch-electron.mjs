@@ -2,7 +2,7 @@
  * 手动安装 Electron 二进制（install 用了 --ignore-scripts 时用这个补）
  * 用法: node scripts/fetch-electron.mjs
  */
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
@@ -17,7 +17,7 @@ if (!existsSync(pkgPath)) {
   process.exit(1)
 }
 
-const pkg = JSON.parse(await import('node:fs').then((fs) => fs.promises.readFile(pkgPath, 'utf8')))
+const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
 const version = pkg.version
 const platform = process.platform
 const arch = process.arch
@@ -68,11 +68,17 @@ if (existsSync(distDir)) {
 }
 mkdirSync(distDir, { recursive: true })
 
-if (platform === 'win32') {
-  console.log('解压中……')
-  execFileSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${distDir}' -Force`], { stdio: 'inherit' })
-} else {
-  execFileSync('unzip', ['-oq', zipPath, '-d', distDir], { stdio: 'inherit' })
+try {
+  if (platform === 'win32') {
+    console.log('解压中……')
+    execFileSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${distDir}' -Force`], { stdio: 'inherit' })
+  } else {
+    execFileSync('unzip', ['-oq', zipPath, '-d', distDir], { stdio: 'inherit' })
+  }
+} catch (e) {
+  // 损坏的 zip 留在缓存里会让每次重试都命中缓存再失败；删掉让下次重新下载
+  try { unlinkSync(zipPath) } catch { /* ignore */ }
+  throw e
 }
 
 if (!existsSync(join(distDir, exeName.split('/')[0]))) {

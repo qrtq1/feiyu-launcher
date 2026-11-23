@@ -75,9 +75,17 @@ interface StoreShape {
   versionSettings: Record<string, VersionSettings>
   launchCount: Record<string, number>
   lastPlayedAt: Record<string, number>
+  /** 同意陶瓦联机协议的时间戳 */
+  multiplayerAgreedAt: number | null
 }
 
 let cache: StoreShape | null = null
+/** 进行中的加载：并发调用共享同一次读盘，避免重复初始化 */
+let loading: Promise<StoreShape> | null = null
+/** 临时文件序号：并发 save 各写各的 tmp，不会互相踩 */
+let saveSeq = 0
+/** 落盘串行化：并发 save 排队执行，避免交错 rename 互相覆盖 */
+let saving: Promise<void> = Promise.resolve()
 
 function storeFile(): string {
   return join(dataRoot(), 'launcher-store.json')
@@ -91,12 +99,18 @@ function defaults(): StoreShape {
     favorites: [],
     versionSettings: {},
     launchCount: {},
-    lastPlayedAt: {}
+    lastPlayedAt: {},
+    multiplayerAgreedAt: null
   }
 }
 
-export async function loadStore(): Promise<StoreShape> {
-  if (cache) return cache
+export function loadStore(): Promise<StoreShape> {
+  if (cache) return Promise.resolve(cache)
+  if (!loading) loading = readStore().finally(() => { loading = null })
+  return loading
+}
+
+async function readStore(): Promise<StoreShape> {
   const file = storeFile()
   let raw: Partial<StoreShape> = {}
   if (existsSync(file)) {
@@ -120,7 +134,8 @@ export async function loadStore(): Promise<StoreShape> {
     favorites: raw.favorites ?? [],
     versionSettings: raw.versionSettings ?? {},
     launchCount: raw.launchCount ?? {},
-    lastPlayedAt: raw.lastPlayedAt ?? {}
+    lastPlayedAt: raw.lastPlayedAt ?? {},
+    multiplayerAgreedAt: raw.multiplayerAgreedAt ?? null
   }
   if (!store.settings.gameDir) store.settings.gameDir = defaultGameDir()
   setGameDir(store.settings.gameDir)
@@ -130,15 +145,20 @@ export async function loadStore(): Promise<StoreShape> {
   return store
 }
 
-async function save(): Promise<void> {
-  if (!cache) return
-  const file = storeFile()
-  await fs.mkdir(dirname(file), { recursive: true })
-  // 落盘用密文快照，内存里的 cache 不动
-  const snapshot: StoreShape = { ...cache, accounts: encodeAccounts(cache.accounts) }
-  const tmp = `${file}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2))
-  await fs.rename(tmp, file)
+function save(): Promise<void> {
+  const run = async (): Promise<void> => {
+    if (!cache) return
+    const file = storeFile()
+    await fs.mkdir(dirname(file), { recursive: true })
+    // 落盘用密文快照，内存里的 cache 不动
+    const snapshot: StoreShape = { ...cache, accounts: encodeAccounts(cache.accounts) }
+    const tmp = `${file}.${process.pid}.${++saveSeq}.tmp`
+    await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2))
+    await fs.rename(tmp, file)
+  }
+  // 串行落盘：前一次失败也不挡后一次；调用方拿到的是自己这次的完成/失败
+  saving = saving.then(run, run)
+  return saving
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -157,7 +177,8 @@ export async function updateSettings(patch: Partial<Settings>): Promise<Settings
 }
 
 export async function listAccounts(): Promise<Account[]> {
-  return (await loadStore()).accounts
+  // 返回副本，与 getSettings 的口径一致，调用方改不到 cache 内部
+  return [...(await loadStore()).accounts]
 }
 
 export async function activeAccount(): Promise<Account | null> {
@@ -245,7 +266,8 @@ export async function migrateVersionData(oldId: string, newId: string): Promise<
   await save()
 }
 
-export async function bumpLaunchCount(versionId: string): Promise<void> {  const s = await loadStore()
+export async function bumpLaunchCount(versionId: string): Promise<void> {
+  const s = await loadStore()
   s.launchCount[versionId] = (s.launchCount[versionId] ?? 0) + 1
   s.lastPlayedAt[versionId] = Date.now()
   await save()
@@ -254,6 +276,14 @@ export async function bumpLaunchCount(versionId: string): Promise<void> {  const
 export async function getLaunchStats(versionId: string): Promise<{ launchCount: number; lastPlayedAt?: number }> {
   const s = await loadStore()
   return { launchCount: s.launchCount[versionId] ?? 0, lastPlayedAt: s.lastPlayedAt[versionId] }
+}
+
+/** 记录用户同意陶瓦联机协议的时间 */
+export async function agreeMultiplayer(): Promise<number> {
+  const s = await loadStore()
+  s.multiplayerAgreedAt = Date.now()
+  await save()
+  return s.multiplayerAgreedAt
 }
 
 export type { StoreShape }

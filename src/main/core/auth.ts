@@ -113,7 +113,8 @@ async function getXstsToken(xblToken: string): Promise<XblResponse> {
       Properties: { SandboxId: 'RETAIL', UserTokens: [xblToken] },
       RelyingParty: 'rp://api.minecraftservices.com/',
       TokenType: 'JWT'
-    })
+    }),
+    signal: AbortSignal.timeout(20000)
   })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { XErr?: number }
@@ -142,7 +143,8 @@ async function loginWithXbox(xblToken: string, uhs: string): Promise<McLoginResp
 
 async function getProfile(mcAccessToken: string): Promise<McProfile> {
   const res = await fetch('https://api.minecraftservices.com/minecraft/profile', {
-    headers: { Authorization: `Bearer ${mcAccessToken}` }
+    headers: { Authorization: `Bearer ${mcAccessToken}` },
+    signal: AbortSignal.timeout(20000)
   })
   if (res.status === 404) throw new Error('这个账号没有购买 Minecraft: Java Edition')
   if (!res.ok) throw new Error(`获取玩家档案失败: HTTP ${res.status}`)
@@ -150,10 +152,11 @@ async function getProfile(mcAccessToken: string): Promise<McProfile> {
 }
 
 /** 用微软 access token 走完整条链，返回账号 */
-async function msTokenToAccount(msToken: MsTokenResponse, clientId: string): Promise<Account> {
+async function msTokenToAccount(msToken: MsTokenResponse): Promise<Account> {
   const xbl = await getXblToken(msToken.access_token)
   const xsts = await getXstsToken(xbl.Token)
-  const uhs = xsts.DisplayClaims.xui[0].uhs
+  const uhs = xsts.DisplayClaims?.xui?.[0]?.uhs
+  if (!uhs) throw new Error('XSTS 响应缺少用户哈希')
   const mc = await loginWithXbox(xsts.Token, uhs)
   const profile = await getProfile(mc.access_token)
   const acc: Account = {
@@ -166,7 +169,6 @@ async function msTokenToAccount(msToken: MsTokenResponse, clientId: string): Pro
     expiresAt: Date.now() + mc.expires_in * 1000,
     skinModel: profile.skins?.find((s) => s.state === 'ACTIVE')?.variant ?? 'classic'
   }
-  void clientId
   return acc
 }
 
@@ -182,7 +184,8 @@ export async function startDeviceCode(clientId: string): Promise<DeviceCodeInfo>
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString()
+    body: body.toString(),
+    signal: AbortSignal.timeout(20000)
   })
   if (!res.ok) {
     const t = await res.text()
@@ -217,16 +220,19 @@ export async function pollDeviceCode(deviceCode: string, clientId: string): Prom
       client_id: ep.clientId,
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
       device_code: deviceCode
-    }).toString()
+    }).toString(),
+    signal: AbortSignal.timeout(20000)
   })
-  const body = (await res.json()) as MsTokenResponse & { error?: string; error_description?: string }
+  const body = (await res.json().catch(() => null)) as (MsTokenResponse & { error?: string; error_description?: string }) | null
+  // 网关/代理可能返回非 JSON 错误页：按契约返回结构化错误，别抛异常打断轮询状态机
+  if (!body) return { status: 'error', message: `HTTP ${res.status}` }
   if (body.error === 'authorization_pending') return { status: 'pending' }
   if (body.error === 'slow_down') return { status: 'pending', message: 'slow_down' }
   if (body.error === 'expired_token') return { status: 'error', message: '设备码已过期，请重新获取' }
   if (body.error === 'authorization_declined' || body.error === 'access_denied') return { status: 'error', message: '你取消了登录' }
   if (body.error || !body.access_token) return { status: 'error', message: body.error_description ?? body.error ?? '未知错误' }
   try {
-    const acc = await msTokenToAccount(body, ep.clientId)
+    const acc = await msTokenToAccount(body)
     await addAccount(acc)
     return { status: 'done', account: acc }
   } catch (e) {
@@ -234,8 +240,18 @@ export async function pollDeviceCode(deviceCode: string, clientId: string): Prom
   }
 }
 
-/** 用 refresh token 续期（启动前自动调用） */
-export async function refreshMicrosoftAccount(id: string, clientId: string): Promise<Account> {
+/** 用 refresh token 续期（启动前自动调用）。
+ *  同一账号的并发续期合并成一次：Azure AD 会轮换 refresh_token，并发两份会让后到者 invalid_grant */
+const refreshing = new Map<string, Promise<Account>>()
+export function refreshMicrosoftAccount(id: string, clientId: string): Promise<Account> {
+  const inflight = refreshing.get(id)
+  if (inflight) return inflight
+  const p = doRefreshMicrosoftAccount(id, clientId).finally(() => { refreshing.delete(id) })
+  refreshing.set(id, p)
+  return p
+}
+
+async function doRefreshMicrosoftAccount(id: string, clientId: string): Promise<Account> {
   const accounts = await listAccounts()
   const acc = accounts.find((a) => a.id === id)
   if (!acc) throw new Error('账号不存在')
@@ -251,14 +267,15 @@ export async function refreshMicrosoftAccount(id: string, clientId: string): Pro
       grant_type: 'refresh_token',
       refresh_token: acc.refreshToken,
       scope: SCOPE
-    }).toString()
+    }).toString(),
+    signal: AbortSignal.timeout(20000)
   })
   if (!res.ok) {
     const t = await res.text()
     throw new Error(`刷新登录失败 HTTP ${res.status}: ${t.slice(0, 200)}`)
   }
   const tok = (await res.json()) as MsTokenResponse
-  const fresh = await msTokenToAccount(tok, ep.clientId)
+  const fresh = await msTokenToAccount(tok)
   const merged: Account = { ...fresh, id: acc.id }
   await updateAccount(merged)
   return merged
@@ -268,6 +285,7 @@ export async function ensureFreshAccount(id: string, clientId: string): Promise<
   const acc = (await listAccounts()).find((a) => a.id === id)
   if (!acc) throw new Error('账号不存在')
   if (acc.type !== 'microsoft') return acc
-  if (acc.expiresAt && acc.expiresAt - Date.now() > 5 * 60 * 1000) return acc
+  // DPAPI 解密失败会得到空令牌：不能带着空 token 启动，走续期（refreshToken 也空时会明确提示重新登录）
+  if (acc.accessToken && acc.expiresAt && acc.expiresAt - Date.now() > 5 * 60 * 1000) return acc
   return refreshMicrosoftAccount(id, clientId)
 }

@@ -1,9 +1,10 @@
 import AdmZip from 'adm-zip'
 import { existsSync, promises as fs } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import type { Artifact, AssetIndex, DownloadProgress, Library, Rule } from '../../shared/types'
-import { downloadFile, ensureDir, formatBytes, pool, sleep } from './http'
-import { getResolvedVersionJson, getVersionJson, alternateUrl, rewriteUrl } from './manifest'
+import type { Artifact, AssetIndex, DownloadProgress, InstalledMark, Library, Rule } from '../../shared/types'
+export type { InstalledMark }
+import { downloadFile, ensureDir, formatBytes, pool } from './http'
+import { getResolvedVersionJson, alternateUrl, rewriteUrl } from './manifest'
 import { assetPath, libPath, P, ensureGameDirs } from './paths'
 
 export interface InstallContext {
@@ -51,11 +52,13 @@ export function currentOS(): { name: string; arch: string } {
   return { name, arch }
 }
 
+/** 平台信息是进程常量，缓存一份，别每条规则都新建对象 */
+const OS = currentOS()
+
 function ruleMatches(rule: Rule): boolean {
   if (rule.os) {
-    const os = currentOS()
-    if (rule.os.name && rule.os.name !== os.name) return false
-    if (rule.os.arch && rule.os.arch !== os.arch) return false
+    if (rule.os.name && rule.os.name !== OS.name) return false
+    if (rule.os.arch && rule.os.arch !== OS.arch) return false
     // os.version 只在 macOS 上偶有用到，这里忽略，避免误判
   }
   if (rule.features) {
@@ -158,15 +161,6 @@ async function unzipNatives(jar: string, dest: string, exclude?: string[]): Prom
   }
 }
 
-export interface InstalledMark {
-  id: string
-  installedAt: number
-  sizeBytes: number
-  files: number
-  javaMajor?: number
-  source: string
-}
-
 export async function readInstalledMark(id: string): Promise<InstalledMark | null> {
   try {
     return JSON.parse(await fs.readFile(P.installedMark(id), 'utf8')) as InstalledMark
@@ -187,9 +181,6 @@ export async function installVersion(id: string, ctx: InstallContext): Promise<I
 
   emit('版本信息', 0, 1, 0, 0)
   const version = await getResolvedVersionJson(id)
-  let parentJar: string | undefined
-  if (version.jar) parentJar = P.versionJar(version.jar)
-  else if (version.inheritsFrom) parentJar = P.versionJar(version.inheritsFrom)
 
   // ---- 收集下载任务 ----
   const tasks: DlTask[] = []
@@ -308,17 +299,20 @@ export async function installVersion(id: string, ctx: InstallContext): Promise<I
   if (existsSync(indexPath)) {
     assetsIndex = JSON.parse(await fs.readFile(indexPath, 'utf8')) as AssetIndex
     const objects = Object.entries(assetsIndex.objects ?? {})
-    const assetTasks: DlTask[] = []
+    // 同一个 hash 可能对应多个名字（1.8 索引实测有 12 条重复）；按 hash 去重，
+    // 否则并发任务会写同一个 .part 互相截断，sha1 校验失败白白重试
+    const byHash = new Map<string, DlTask>()
     for (const [, obj] of objects) {
-      const dest = assetPath(obj.hash)
-      assetTasks.push({
+      if (byHash.has(obj.hash)) continue
+      byHash.set(obj.hash, {
         url: `https://resources.download.minecraft.net/${obj.hash.slice(0, 2)}/${obj.hash}`,
-        dest,
+        dest: assetPath(obj.hash),
         sha1: obj.hash,
         size: obj.size,
         label: obj.hash
       })
     }
+    const assetTasks = [...byHash.values()]
     const assetBytes = assetTasks.reduce((s, t) => s + (t.size ?? 0), 0)
     bytesTotal += assetBytes
     let aDone = 0
@@ -349,7 +343,6 @@ export async function installVersion(id: string, ctx: InstallContext): Promise<I
         throw new Error(`${failed.length}/${assetTasks.length} 个资源下载失败，已下载的会保留，重试安装即可续传。示例: ${detail}`)
       }
       emit('下载资源', assetTasks.length, assetTasks.length, bytesDone, bytesTotal, `警告: ${failed.length} 个资源失败`, false)
-      void detail
     }
 
     // legacy / virtual assets
@@ -362,15 +355,13 @@ export async function installVersion(id: string, ctx: InstallContext): Promise<I
   }
 
   // ---- 写安装标记 ----
+  // 只算本版本自己的 jar；继承版本共用父 jar，不重复计算
   let sizeBytes = 0
   try {
     const st = await fs.stat(P.versionJar(id))
     sizeBytes += st.size
   } catch {
     /* jar 可能不存在（继承版本） */
-  }
-  if (parentJar && parentJar !== P.versionJar(id) && existsSync(parentJar)) {
-    // 继承版本共用父 jar，不重复计算
   }
 
   const mark: InstalledMark = {
@@ -396,14 +387,23 @@ function getSourceLabel(): string {
 
 async function materializeVirtualAssets(index: AssetIndex, base: string): Promise<void> {
   ensureDir(base)
-  for (const [name, obj] of Object.entries(index.objects ?? {})) {
+  const madeDirs = new Set<string>([base])
+  const entries = Object.entries(index.objects ?? {}).filter(([name, obj]) => {
     const src = assetPath(obj.hash)
     const dest = join(base, name)
-    if (!existsSync(src)) continue
-    if (existsSync(dest)) continue
-    ensureDir(dirname(dest))
+    return existsSync(src) && !existsSync(dest)
+  })
+  // 小文件成千上万，串行复制太慢；并发复制，目录按需建一次
+  await pool(entries, 16, async ([name, obj]) => {
+    const src = assetPath(obj.hash)
+    const dest = join(base, name)
+    const dir = dirname(dest)
+    if (!madeDirs.has(dir)) {
+      ensureDir(dir)
+      madeDirs.add(dir)
+    }
     await fs.copyFile(src, dest).catch(() => {})
-  }
+  })
 }
 
 /** 检查某个版本是否已完整安装 */
@@ -426,24 +426,24 @@ export async function isInstalled(id: string): Promise<boolean> {
 
 /** 计算目录大小 */
 export async function dirSize(dir: string): Promise<number> {
-  let total = 0
+  const files: string[] = []
   const walk = async (d: string): Promise<void> => {
     const items = await fs.readdir(d, { withFileTypes: true }).catch(() => [])
     for (const it of items) {
       const full = join(d, it.name)
       if (it.isDirectory()) await walk(full)
-      else if (it.isFile()) {
-        try {
-          total += (await fs.stat(full)).size
-        } catch {
-          /* ignore */
-        }
-      }
+      else if (it.isFile()) files.push(full)
     }
   }
   await walk(dir)
+  // stat 并发跑（整数求和，顺序不影响结果）
+  let total = 0
+  await pool(files, 32, async (f) => {
+    try {
+      total += (await fs.stat(f)).size
+    } catch {
+      /* ignore */
+    }
+  })
   return total
 }
-
-export { sleep }
-export { getVersionJson }

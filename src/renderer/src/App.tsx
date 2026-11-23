@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import type { LaunchStatus } from '../../shared/types'
 import { AppProvider, useApp } from './store'
 import { Icon, Logo, ProgressBar, Spinner } from './components/ui'
 import Home from './pages/Home'
@@ -6,6 +7,7 @@ import Downloads from './pages/Downloads'
 import Accounts from './pages/Accounts'
 import SettingsPage from './pages/Settings'
 import InstancePage from './pages/Instance'
+import Multiplayer from './pages/Multiplayer'
 
 function TitleBar() {
   return (
@@ -36,6 +38,7 @@ function TopNavigation() {
   const items = [
     { id: 'home', icon: 'play', label: '启动' },
     { id: 'downloads', icon: 'download', label: '下载' },
+    { id: 'multiplayer', icon: 'globe', label: '联机' },
     { id: 'accounts', icon: 'user', label: '账号' },
     { id: 'settings', icon: 'settings', label: '设置' }
   ] as const
@@ -67,10 +70,10 @@ function StatusBar() {
   }, [runningCount])
 
   // 多开时显示最早启动的那个的时长，并标出正在跑几个
-  const first = runningList
-    .map(([, s]) => s)
-    .filter((s) => s.startedAt)
-    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))[0] ?? (status.running ? status : null)
+  const first = runningList.reduce<LaunchStatus | null>((earliest, [, current]) => {
+    if (!current.startedAt) return earliest
+    return !earliest || current.startedAt < (earliest.startedAt ?? 0) ? current : earliest
+  }, null) ?? (status.running ? status : null)
   const elapsed = first?.startedAt ? Math.max(0, Math.floor((now - first.startedAt) / 1000)) : 0
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
   const ss = String(elapsed % 60).padStart(2, '0')
@@ -184,16 +187,45 @@ function Toasts() {
   )
 }
 
+function BackgroundLayer() {
+  const { settings } = useApp()
+  const [src, setSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    if (!settings?.backgroundPath || settings.backgroundKind === 'none') {
+      setSrc(null)
+      return () => { alive = false }
+    }
+    void window.api.settings.resolveMedia(settings.backgroundPath).then((url) => {
+      if (alive) setSrc(url)
+    })
+    return () => { alive = false }
+  }, [settings?.backgroundPath, settings?.backgroundKind])
+
+  if (!src) return null
+  if (settings?.backgroundKind === 'video') {
+    return <video className="app-background-media" src={src} autoPlay loop muted playsInline aria-hidden="true" />
+  }
+  if (settings?.backgroundKind === 'wallpaper') {
+    return <iframe className="app-background-media app-background-frame" src={src} title="自定义动态壁纸" tabIndex={-1} />
+  }
+  return <img className="app-background-media" src={src} alt="" aria-hidden="true" />
+}
+
 function Shell() {
-  const { page } = useApp()
+  const { page, settings } = useApp()
   return (
-    <div className="app">
+    <div className="app" style={settings?.accentColor ? { '--accent': settings.accentColor, '--accent-soft': `${settings.accentColor}18` } as CSSProperties : undefined}>
       <TitleBar />
       <div className="body">
+        <BackgroundLayer />
+        <div className="app-background-shade" />
         <main className="content">
           <div className="page-wrap" key={page}>
             {page === 'home' && <Home />}
             {page === 'downloads' && <Downloads />}
+            {page === 'multiplayer' && <Multiplayer />}
             {page === 'accounts' && <Accounts />}
             {page === 'settings' && <SettingsPage />}
             {page === 'instance' && <InstancePage />}

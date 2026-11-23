@@ -55,3 +55,8 @@ test('splitArgs 空白串返回空数组', () => {
   assert.deepEqual(splitArgs('   '), [])
   assert.deepEqual(splitArgs(''), [])
 })
+
+test('redactArgs 掩掉旧版本的 --session 令牌', () => {
+  assert.deepEqual(redactArgs(['--session', 'token:abc', '--version', '1.7.10']), ['--session', HIDDEN, '--version', '1.7.10'])
+  assert.deepEqual(redactArgs(['--session=token:abc']), [`--session=${HIDDEN}`])
+})

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { McmodHit, ResourceHit } from '../../../shared/types'
 import { useApp } from '../store'
-import { Icon, Spinner, Tag } from './ui'
+import { Icon, Spinner, Tag, cmpMcVersions, fmtDownloads } from './ui'
 
 const LOADERS = ['fabric', 'forge', 'neoforge', 'quilt']
 const TAGS = [
@@ -29,8 +29,6 @@ const SOURCES = [
 /** 只有这几类 CurseForge 才有对应类目 */
 const CF_TYPES = new Set(['mod', 'modpack', 'resourcepack', 'shader'])
 
-const LOADER_OF = (type: string): string | undefined => (type === 'mod' ? undefined : undefined)
-
 function normName(s?: string): string {
   if (!s) return ''
   return s
@@ -55,27 +53,22 @@ export default function ResourcePane({ type }: { type: string }) {
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [favorites, setFavorites] = useState<string[]>([])
+  const seqRef = useRef(0)
 
   const mc = useMemo(() => {
-    const cmp = (a: string, b: string): number => {
-      const pa = a.split('.').map(Number)
-      const pb = b.split('.').map(Number)
-      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const x = pa[i] ?? 0
-        const y = pb[i] ?? 0
-        if (x !== y) return x - y
-      }
-      return 0
-    }
     const plain = localVersions.filter((v) => v.complete && /^\d+\.\d+(\.\d+)?$/.test(v.id)).map((v) => v.id)
-    return plain.sort((a, b) => cmp(b, a))[0]
+    return plain.sort((a, b) => cmpMcVersions(b, a))[0]
   }, [localVersions])
 
   const selectedVersion = localVersions[0]?.id
 
   const loadFav = async (): Promise<void> => {
-    const list = await window.api.favorites.list()
-    setFavorites(list.map((f) => f.id))
+    try {
+      const list = await window.api.favorites.list()
+      setFavorites(list.map((f) => f.id))
+    } catch (e) {
+      toast((e as Error).message, 'err')
+    }
   }
 
   useEffect(() => {
@@ -83,6 +76,7 @@ export default function ResourcePane({ type }: { type: string }) {
   }, [])
 
   const run = async (): Promise<void> => {
+    const seq = ++seqRef.current
     setLoading(true)
     setError(null)
     const ver = mcFilter || mc
@@ -97,7 +91,7 @@ export default function ResourcePane({ type }: { type: string }) {
               query,
               type,
               mcVersion: ver,
-              loader: loader || LOADER_OF(type),
+              loader: loader || undefined,
               tag: tag || undefined,
               sort,
               limit: 24
@@ -110,6 +104,7 @@ export default function ResourcePane({ type }: { type: string }) {
           : Promise.resolve({ hits: [] as ResourceHit[], total: 0 }),
         wantMcmod ? window.api.resources.searchMcmod(query, 10).catch(() => [] as McmodHit[]) : Promise.resolve([] as McmodHit[])
       ])
+      if (seq !== seqRef.current) return
 
       // 两个源合并：同名（规范化后）的只留 Modrinth 那条
       const seen = new Set<string>()
@@ -139,9 +134,9 @@ export default function ResourcePane({ type }: { type: string }) {
       })
       setMcmodHits(deduped)
     } catch (e) {
-      setError((e as Error).message)
+      if (seq === seqRef.current) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current) setLoading(false)
     }
   }
 
@@ -192,30 +187,32 @@ export default function ResourcePane({ type }: { type: string }) {
     } catch (e) {
       toast(`失败：${(e as Error).message}`, 'err')
     } finally {
-      setBusyId(null)
+      setBusyId((cur) => (cur === hit.id ? null : cur))
     }
   }
 
   const toggleFav = async (hit: ResourceHit): Promise<void> => {
-    if (favorites.includes(hit.id)) {
-      const list = await window.api.favorites.remove(hit.id)
+    try {
+      if (favorites.includes(hit.id)) {
+        const list = await window.api.favorites.remove(hit.id)
+        setFavorites(list.map((f) => f.id))
+        toast('已取消收藏')
+        return
+      }
+      const list = await window.api.favorites.add({
+        id: hit.id,
+        type: hit.type,
+        title: hit.title,
+        iconUrl: hit.iconUrl,
+        author: hit.author,
+        addedAt: Date.now()
+      })
       setFavorites(list.map((f) => f.id))
-      toast('已取消收藏')
-      return
+      toast('已收藏', 'ok')
+    } catch (e) {
+      toast((e as Error).message, 'err')
     }
-    const list = await window.api.favorites.add({
-      id: hit.id,
-      type: hit.type,
-      title: hit.title,
-      iconUrl: hit.iconUrl,
-      author: hit.author,
-      addedAt: Date.now()
-    })
-    setFavorites(list.map((f) => f.id))
-    toast('已收藏', 'ok')
   }
-
-  const fmt = (n: number): string => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
 
   return (
     <div className="pane">
@@ -330,7 +327,7 @@ export default function ResourcePane({ type }: { type: string }) {
                     <Tag key={c}>{c}</Tag>
                   ))}
                   <Tag tone="accent">
-                    <Icon name="download" size={10} /> {fmt(h.downloads)}
+                    <Icon name="download" size={10} /> {fmtDownloads(h.downloads)}
                   </Tag>
                 </div>
                 <button className="dl-btn full" disabled={busyId === h.id} onClick={() => void act(h)}>

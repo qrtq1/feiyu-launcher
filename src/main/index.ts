@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { appendFileSync, existsSync, promises as fs, renameSync, statSync, unlinkSync } from 'node:fs'
+import { appendFileSync, existsSync, promises as fs, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { IPC } from '../shared/api'
-import type { DownloadProgress, FavoriteItem, InstanceFileKind, LaunchProgress, LaunchStatus, LogLine, ModFile, ServerEntry, Settings, VersionSettings, WorldMapFile } from '../shared/types'
+import type { DownloadProgress, FavoriteItem, InstanceFileKind, LaunchProgress, LaunchStatus, LogLine, ModFile, ServerEntry, Settings, TerracottaStatus, VersionSettings, WorldMapFile } from '../shared/types'
 import { addOfflineAccount, ensureFreshAccount, pollDeviceCode, refreshMicrosoftAccount, startDeviceCode } from './core/auth'
 import { ensureAuthlibInjector, fetchAuthlibMeta, findAuthlibAccount, loginAuthlib, refreshAuthlib } from './core/authlib'
 import { downloadJavaRuntime, findJava, listJava, probeJava, runtimeComponentFor } from './core/java'
@@ -22,6 +23,7 @@ import { deleteWorld, listWorlds } from './core/worlds'
 import { addServer, listServers, removeServer } from './core/servers'
 import { downloadWorldMap, importWorldZip, installCfModpack, listCfFiles, listWorldMapFiles, searchCfProjects, searchWorldMaps } from './core/curseforge'
 import { cloneInstance, describeComponents, exportInstance, importInstance, instanceStats, listInstanceFiles, renameInstance, retireComponent, toggleInstanceFile } from './core/instances'
+import * as terracotta from './core/terracotta'
 import { bumpLaunchCount, getVersionSettings, setVersionSettings } from './core/store'
 import { activeAccount, addFavorite, getSettings, listAccounts, listFavorites, loadStore, migrateVersionData, removeAccount, removeFavorite, setActiveAccount, updateSettings } from './core/store'
 
@@ -325,6 +327,21 @@ function publishLaunchStatus(status: LaunchStatus): void {
   send(IPC.evStatus, status)
 }
 
+// ---------------- 陶瓦联机 ----------------
+/** 同意了联机协议的时间戳；跟数据目录走，绿色版搬走也还在 */
+function mpAgreeFile(): string {
+  return join(terracotta.terracottaDir(), 'agreed.json')
+}
+
+function readMpAgreed(): number | null {
+  try {
+    const j = JSON.parse(readFileSync(mpAgreeFile(), 'utf8')) as { agreedAt?: number }
+    return typeof j.agreedAt === 'number' ? j.agreedAt : null
+  } catch {
+    return null
+  }
+}
+
 async function registerIpc(): Promise<void> {
   const settings = await getSettings()
   setGameDir(settings.gameDir)
@@ -365,6 +382,32 @@ async function registerIpc(): Promise<void> {
       filters: [{ name: 'Java', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }]
     })
     return r.canceled ? null : (r.filePaths[0] ?? null)
+  })
+  ipcMain.handle('dialog:pickBackground', async () => {
+    const r = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openFile'],
+      filters: [
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'] },
+        { name: '视频', extensions: ['mp4', 'webm', 'm4v', 'mov', 'ogv'] },
+        { name: 'Wallpaper Engine 网页壁纸', extensions: ['html', 'htm'] },
+        { name: '所有支持的文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'mp4', 'webm', 'm4v', 'mov', 'ogv', 'html', 'htm'] }
+      ]
+    })
+    if (r.canceled || !r.filePaths[0]) return null
+    const path = r.filePaths[0]
+    const ext = path.split('.').pop()?.toLowerCase() ?? ''
+    const kind = ['mp4', 'webm', 'm4v', 'mov', 'ogv'].includes(ext) ? 'video' : ['html', 'htm'].includes(ext) ? 'wallpaper' : 'image'
+    return { path, kind }
+  })
+  ipcMain.handle(IPC.resolveMedia, async (_e, rawPath: string) => {
+    if (typeof rawPath !== 'string' || !rawPath.trim()) return null
+    try {
+      const path = rawPath.trim()
+      if (!existsSync(path) || !statSync(path).isFile()) return null
+      return pathToFileURL(path).toString()
+    } catch {
+      return null
+    }
   })
 
   // ---- 版本 ----
@@ -962,6 +1005,63 @@ async function registerIpc(): Promise<void> {
     }
   })
 
+  // ---- 陶瓦联机（Terracotta）----
+  ipcMain.handle(IPC.mpStatus, async (): Promise<TerracottaStatus> => {
+    const info = terracotta.runtimeInfo()
+    const meta = info ? await terracotta.currentMeta() : null
+    const version = terracotta.installedVersion()
+    return {
+      agreedAt: readMpAgreed(),
+      installed: Boolean(version),
+      version,
+      running: Boolean(info),
+      attached: Boolean(info?.attached),
+      meta
+    }
+  })
+  ipcMain.handle(IPC.mpAgree, async () => {
+    await fs.mkdir(terracotta.terracottaDir(), { recursive: true })
+    await fs.writeFile(mpAgreeFile(), JSON.stringify({ agreedAt: Date.now() }, null, 2), 'utf8')
+    return true
+  })
+  ipcMain.handle(IPC.mpInstall, async () => {
+    const task = { taskId: randomUUID(), phase: '陶瓦联机', current: 0, total: 1 }
+    emitProgress({ ...task, bytesDone: 0, bytesTotal: 0, finished: false })
+    try {
+      const r = await terracotta.installTerracotta((done, total) => {
+        emitProgress({ ...task, bytesDone: done, bytesTotal: total, finished: false })
+      })
+      emitProgress({ ...task, current: 1, bytesDone: 0, bytesTotal: 0, finished: true })
+      return r
+    } catch (e) {
+      emitProgress({ ...task, bytesDone: 0, bytesTotal: 0, finished: true, error: (e as Error).message })
+      throw e
+    }
+  })
+  ipcMain.handle(IPC.mpStart, async () => {
+    await terracotta.ensureRunning()
+  })
+  ipcMain.handle(IPC.mpHost, async () => {
+    await terracotta.hostRoom((await activeAccount())?.name ?? '')
+  })
+  ipcMain.handle(IPC.mpJoin, async (_e, room: string) => {
+    await terracotta.joinRoom(String(room ?? ''), (await activeAccount())?.name ?? '')
+  })
+  ipcMain.handle(IPC.mpLeave, async () => {
+    await terracotta.leaveRoom()
+  })
+  ipcMain.handle(IPC.mpStop, async () => {
+    await terracotta.stopTerracotta()
+  })
+  ipcMain.handle(IPC.mpState, async () => terracotta.getState())
+  ipcMain.handle(IPC.mpLog, async () => terracotta.getLog())
+  ipcMain.handle(IPC.mpOpenDir, async () => {
+    const dir = terracotta.terracottaDir()
+    await fs.mkdir(dir, { recursive: true })
+    const error = await shell.openPath(dir)
+    if (error) throw new Error(`无法打开陶瓦联机目录：${error}`)
+  })
+
   // ---- shell ----
   ipcMain.handle(IPC.openExternal, async (_e, url: string) => {
     if (!/^https?:\/\//i.test(url)) throw new Error('只允许打开 http(s) 链接')
@@ -1005,6 +1105,11 @@ if (!gotLock) {
     })
   }).catch((e: Error) => {
     bootLog(`whenReady failed: ${e?.stack ?? e}`)
+  })
+
+  app.on('before-quit', () => {
+    // 联机服务是本启动器拉起来的，退出时顺手停掉（附着的别人的实例不动）
+    void terracotta.stopTerracotta()
   })
 
   app.on('window-all-closed', () => {

@@ -27,6 +27,7 @@ type IconName =
   | 'globe'
   | 'sparkles'
   | 'pin'
+  | 'image'
 
 const PATHS: Record<IconName, ReactNode> = {
   home: <path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" />,
@@ -117,6 +118,7 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   pin: <path d="M12 17v5M9 10V5a1 1 0 0 1 0-2h6a1 1 0 0 1 0 2v5l4 4v2H5v-2z" />,
+  image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8" cy="9" r="1.5" /><path d="m4 17 5-5 3.5 3 2.5-2 5 4" /></>,
   box: (
     <>
       <path d="M12 3 3 7.5v9L12 21l9-4.5v-9z" />
@@ -145,6 +147,23 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z" />
     </>
   )
+}
+
+/** 版本号比较：1.2.10 比 1.2.9 大；缺位按 0 算 */
+export function cmpMcVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return x - y
+  }
+  return 0
+}
+
+/** 下载量：1234 → 1.2K，1234567 → 1.2M */
+export function fmtDownloads(n: number): string {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n)
 }
 
 export function Icon({ name, size = 18, style }: { name: IconName; size?: number; style?: CSSProperties }) {
@@ -192,7 +211,7 @@ export function ProgressBar({ value, max = 100, indeterminate = false }: { value
   const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0
   return (
     <div className={`progress ${indeterminate ? 'progress-indeterminate' : ''}`}>
-      <div className="progress-fill" style={{ width: indeterminate ? '35%' : `${pct}%` }} />
+      <div className="progress-fill" style={indeterminate ? { width: '35%' } : { width: '100%', transform: `scaleX(${pct / 100})` }} />
     </div>
   )
 }

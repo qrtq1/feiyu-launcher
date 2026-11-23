@@ -2,9 +2,10 @@ import { existsSync, promises as fs } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import type { InstanceFile, InstanceFileKind, VersionComponent, VersionStats } from '../../shared/types'
 import { dirSize } from './install'
-import { getResolvedVersionJson, getVersionJson } from './manifest'
+import { pool } from './http'
+import { getResolvedVersionJson } from './manifest'
 import { P } from './paths'
-import { getLaunchStats, loadStore } from './store'
+import { getLaunchStats } from './store'
 
 /** 实例里各类资源的目录名 */
 export function filesDir(versionId: string, kind: InstanceFileKind, isolated = true): string {
@@ -17,24 +18,24 @@ export async function listInstanceFiles(versionId: string, kind: InstanceFileKin
   const dir = filesDir(versionId, kind, isolated)
   if (!existsSync(dir)) return []
   const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
-  const out: InstanceFile[] = []
-  for (const it of items) {
+  // stat / 目录大小并发算；pool 按原顺序回填，排序规则不变
+  const out = (await pool(items, 8, async (it): Promise<InstanceFile | null> => {
     const full = join(dir, it.name)
     const st = await fs.stat(full).catch(() => null)
-    if (!st) continue
+    if (!st) return null
     // 存档目录算一个整体
     const isDir = it.isDirectory()
-    if (isDir && kind !== 'saves') continue
+    if (isDir && kind !== 'saves') return null
     const disabled = it.name.endsWith('.disabled')
-    out.push({
+    return {
       name: disabled ? it.name.replace(/\.disabled$/, '') : it.name,
       path: full,
       size: isDir ? await dirSize(full).catch(() => 0) : st.size,
       mtime: st.mtimeMs,
       isDir,
       enabled: !disabled
-    })
-  }
+    }
+  })).filter((f): f is InstanceFile => f !== null)
   return out.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
 }
 
@@ -50,16 +51,15 @@ export async function toggleInstanceFile(path: string): Promise<void> {
 
 /** 解析一个实例实际装了什么 */
 export async function describeComponents(versionId: string): Promise<VersionComponent[]> {
-  const raw = await getVersionJson(versionId).catch(() => null)
+  // resolved 合并后已带 inheritsFrom，不必把同一份 json 读两遍
   const resolved = await getResolvedVersionJson(versionId).catch(() => null)
-  if (!raw || !resolved) throw new Error(`找不到版本 ${versionId}`)
+  if (!resolved) throw new Error(`找不到版本 ${versionId}`)
 
   const out: VersionComponent[] = []
-  const mcVersion = raw.inheritsFrom ?? versionId
+  const mcVersion = resolved.inheritsFrom ?? versionId
 
   out.push({ kind: 'minecraft', name: 'Minecraft', version: mcVersion, removable: false })
 
-  const nameOf = (libraryName: string): string => libraryName.split(':')[1] ?? libraryName
   const libNames = (resolved.libraries ?? []).map((l) => ({ name: l.name, ver: l.name.split(':')[2] ?? '' }))
   const find = (re: RegExp) => libNames.find((l) => re.test(l.name))
 
@@ -85,20 +85,17 @@ export async function describeComponents(versionId: string): Promise<VersionComp
     }
   }
 
-  void nameOf
   return out
 }
 
 /** 实例统计：启动次数 + 目录大小 + 安装时间 */
 export async function instanceStats(versionId: string): Promise<VersionStats> {
-  const store = await loadStore()
   const mark = await fs
     .readFile(P.installedMark(versionId), 'utf8')
     .then((t) => JSON.parse(t) as { installedAt?: number })
     .catch(() => null)
   const launch = await getLaunchStats(versionId)
   const size = await dirSize(P.versionDir(versionId)).catch(() => 0)
-  void store
   return {
     launchCount: launch.launchCount,
     installedAt: mark?.installedAt,
@@ -207,20 +204,28 @@ export async function importInstance(zipPath: string): Promise<{ versionId: stri
   const base = clean(pack.versionId ?? basename(zipPath, extname(zipPath)))
   let id = base
   let n = 1
-  while (existsSync(P.versionDir(id))) {
-    n++
-    id = `${base}-imported${n > 2 ? n : ''}`
+  let root = P.versionDir(id)
+  await fs.mkdir(dirname(root), { recursive: true })
+  // 不带 recursive 的 mkdir：EEXIST 就是撞名，换下一个后缀重试，避免检查与创建之间的 TOCTOU
+  for (;;) {
+    try {
+      await fs.mkdir(root)
+      break
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+      n++
+      id = `${base}-imported${n > 2 ? n : ''}`
+      root = P.versionDir(id)
+    }
   }
-  const root = P.versionDir(id)
-  await fs.mkdir(root, { recursive: true })
 
   let files = 0
   for (const e of zip.getEntries()) {
     if (e.isDirectory) continue
     const name = e.entryName.replace(/\\/g, '/')
     if (name === 'feiyu-pack.json') continue
-    // 防目录穿越
-    if (name.startsWith('/') || name.split('/').includes('..')) continue
+    // 防目录穿越（含盘符 / 冒号路径）
+    if (name.startsWith('/') || name.split('/').includes('..') || /^[a-z]:/i.test(name) || name.includes(':')) continue
     if (name.startsWith('_removed/')) continue
 
     // 版本 json / jar 的文件名必须跟目录名一致，id 变了就一起改名
@@ -333,11 +338,3 @@ export async function cloneInstance(srcId: string, rawNewId: string): Promise<st
   return newId
 }
 
-/** 补全文件：把安装标记删掉重装一次（调用方负责跑 installVersion） */
-export async function clearInstalledMark(versionId: string): Promise<void> {
-  const mark = P.installedMark(versionId)
-  if (existsSync(mark)) await fs.unlink(mark)
-  void basename
-  void extname
-  void join
-}

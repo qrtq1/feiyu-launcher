@@ -45,7 +45,10 @@ const DEFAULT_SETTINGS: Settings = {
   versionIsolation: true,
   fullscreen: false,
   closeOnLaunch: false,
-  msaClientId: ''
+  msaClientId: '',
+  backgroundPath: '',
+  backgroundKind: 'none',
+  accentColor: '#1663bc'
 }
 
 function log(msg: string): void {

@@ -90,7 +90,7 @@ export async function loginAuthlib(apiUrl: string, username: string, password: s
     method: 'POST',
     body: JSON.stringify(body)
   })
-  if (!res.accessToken) throw new Error('服务器没有返回 accessToken')
+  if (!res?.accessToken) throw new Error('服务器没有返回 accessToken')
   const profile = res.selectedProfile ?? res.availableProfiles?.[0]
   if (!profile) throw new Error('这个账号没有已创建的角色（先去服务器网页建一个）')
 
@@ -115,6 +115,7 @@ export async function refreshAuthlib(acc: Account): Promise<Account> {
     `${acc.apiUrl}/authserver/refresh`,
     { method: 'POST', body: JSON.stringify(body) }
   )
+  if (!res?.accessToken) throw new Error('服务器没有返回 accessToken')
   const fresh: Account = {
     ...acc,
     accessToken: res.accessToken,
@@ -148,18 +149,19 @@ let cachedInjector: string | null = null
  * 确保 authlib-injector 存在，返回 jar 路径。
  * 走 BMCLAPI 镜像（官方源在国内可能很慢）。
  */
-export async function ensureAuthlibInjector(onProgress?: (done: number, total: number) => void): Promise<string> {
-  if (cachedInjector && existsSync(cachedInjector)) return cachedInjector
+let injectorInflight: Promise<string> | null = null
+
+export function ensureAuthlibInjector(onProgress?: (done: number, total: number) => void): Promise<string> {
+  if (cachedInjector && existsSync(cachedInjector)) return Promise.resolve(cachedInjector)
+  // 并发调用共享同一次下载，避免两个写者抢同一个 .part
+  if (!injectorInflight) injectorInflight = doEnsureAuthlibInjector(onProgress).finally(() => { injectorInflight = null })
+  return injectorInflight
+}
+
+async function doEnsureAuthlibInjector(onProgress?: (done: number, total: number) => void): Promise<string> {
   ensureDir(INJECTOR_DIR())
 
-  let latest: InjectorLatest
-  try {
-    latest = await fetchJson<InjectorLatest>(`${INJECTOR_MIRROR}/artifact/latest.json`, { timeout: 15000 })
-  } catch {
-    latest = await fetchJson<InjectorLatest>('https://authlib-injector.yushi.moe/artifact/latest.json', { timeout: 20000 })
-  }
-
-  // 先找本地已有的版本
+  // 先找本地已有的版本：本地有 jar 时离线也能直接用，不必先联网
   const existing = (await fs.readdir(INJECTOR_DIR()).catch(() => []))
     .filter((f) => /^authlib-injector-.*\.jar$/.test(f))
     .sort()
@@ -167,6 +169,13 @@ export async function ensureAuthlibInjector(onProgress?: (done: number, total: n
   if (existing) {
     cachedInjector = join(INJECTOR_DIR(), existing)
     return cachedInjector
+  }
+
+  let latest: InjectorLatest
+  try {
+    latest = await fetchJson<InjectorLatest>(`${INJECTOR_MIRROR}/artifact/latest.json`, { timeout: 15000 })
+  } catch {
+    latest = await fetchJson<InjectorLatest>('https://authlib-injector.yushi.moe/artifact/latest.json', { timeout: 20000 })
   }
 
   const dest = join(INJECTOR_DIR(), `authlib-injector-${latest.version}.jar`)
@@ -188,6 +197,3 @@ export async function ensureAuthlibInjector(onProgress?: (done: number, total: n
   throw new Error(`authlib-injector 下载失败: ${lastErr?.message ?? '未知错误'}`)
 }
 
-export function authlibInjectorArg(jar: string, apiUrl: string): string {
-  return `-javaagent:${jar}=${apiUrl}`
-}

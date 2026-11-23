@@ -4,9 +4,11 @@
  * 一个文件夹，双击即用，不解压、不安装、不碰 %TEMP%。
  */
 import { cpSync, existsSync, mkdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = process.cwd()
+// 以脚本位置推项目根，从别的目录调用也不会找错路径
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = join(root, 'dist', 'win-unpacked')
 const dst = join(root, 'dist', 'green', '肥鱼启动器')
 

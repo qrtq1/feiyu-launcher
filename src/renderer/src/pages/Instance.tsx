@@ -19,31 +19,38 @@ const TABS: { id: Tab; label: string; group?: string }[] = [
 ]
 
 export default function InstancePage() {
-  const { instanceId, setPage, localVersions, toast, launch, active } = useApp()
+  const { instanceId, setPage, localVersions, toast, launch, active, reloadLocal } = useApp()
   const [tab, setTab] = useState<Tab>('overview')
   const [components, setComponents] = useState<VersionComponent[]>([])
   const [stats, setStats] = useState<VersionStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const reloadReq = useRef(0)
 
   const version = useMemo(() => localVersions.find((v) => v.id === instanceId), [localVersions, instanceId])
 
   const reload = async (): Promise<void> => {
     if (!instanceId) return
+    const req = ++reloadReq.current
     setLoading(true)
     try {
       const [c, s] = await Promise.all([window.api.instance.components(instanceId), window.api.instance.stats(instanceId)])
+      if (req !== reloadReq.current) return
       setComponents(c)
       setStats(s)
     } catch (e) {
-      toast((e as Error).message, 'err')
+      if (req === reloadReq.current) toast((e as Error).message, 'err')
     } finally {
-      setLoading(false)
+      if (req === reloadReq.current) setLoading(false)
     }
   }
 
   useEffect(() => {
     void reload()
+    return () => {
+      reloadReq.current++
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId])
 
@@ -123,14 +130,19 @@ export default function InstancePage() {
                 </button>
                 <button
                   className="danger-btn"
+                  disabled={deleting}
                   onClick={async () => {
+                    if (deleting) return
+                    setDeleting(true)
                     try {
                       await window.api.versions.remove(instanceId)
+                      await reloadLocal()
                       toast(`已删除 ${instanceId}`)
                       setPage('home')
                     } catch (e) {
                       toast(`删除失败：${(e as Error).message}`, 'err')
                     } finally {
+                      setDeleting(false)
                       setConfirmDelete(false)
                     }
                   }}
@@ -164,6 +176,7 @@ function Overview({
   onTest: () => void
 }) {
   const { toast } = useApp()
+  const safeOpen = (p: Promise<unknown>): void => { void p.catch((e) => toast(`打开失败：${(e as Error).message}`, 'err')) }
   const fmt = (n: number): string => (n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : `${(n / 1048576).toFixed(0)} MB`)
 
   return (
@@ -204,16 +217,16 @@ function Overview({
       <div className="inst-card">
         <div className="inst-card-title">快捷方式</div>
         <div className="btn-row">
-          <button className="ghost-btn" onClick={() => void window.api.instance.openFolder(versionId, 'root')}>
+          <button className="ghost-btn" onClick={() => safeOpen(window.api.instance.openFolder(versionId, 'root'))}>
             <Icon name="folder" size={14} /> 实例文件夹
           </button>
-          <button className="ghost-btn" onClick={() => void window.api.instance.openFolder(versionId, 'saves')}>
+          <button className="ghost-btn" onClick={() => safeOpen(window.api.instance.openFolder(versionId, 'saves'))}>
             <Icon name="globe" size={14} /> 存档文件夹
           </button>
-          <button className="ghost-btn" onClick={() => void window.api.instance.openFolder(versionId, 'mods')}>
+          <button className="ghost-btn" onClick={() => safeOpen(window.api.instance.openFolder(versionId, 'mods'))}>
             <Icon name="box" size={14} /> 模组文件夹
           </button>
-          <button className="ghost-btn" onClick={() => void window.api.instance.openFolder(versionId, 'screenshots')}>
+          <button className="ghost-btn" onClick={() => safeOpen(window.api.instance.openFolder(versionId, 'screenshots'))}>
             <Icon name="sparkles" size={14} /> 截图文件夹
           </button>
         </div>
@@ -231,8 +244,12 @@ function Overview({
           <button
             className="ghost-btn"
             onClick={async () => {
-              const r = await window.api.instance.export(versionId)
-              toast(`已导出到 ${r.file}`, 'ok')
+              try {
+                const r = await window.api.instance.export(versionId)
+                toast(`已导出到 ${r.file}`, 'ok')
+              } catch (e) {
+                toast(`导出失败：${(e as Error).message}`, 'err')
+              }
             }}
           >
             <Icon name="download" size={14} /> 导出整合包
@@ -252,18 +269,38 @@ function InstanceSettings({ versionId }: { versionId: string }) {
   const { settings, toast } = useApp()
   const [vs, setVs] = useState<VersionSettings>({})
   const [loaded, setLoaded] = useState(false)
+  const saveReq = useRef(0)
 
   useEffect(() => {
-    void window.api.instance.getSettings(versionId).then((v) => {
-      setVs(v)
-      setLoaded(true)
-    })
+    let on = true
+    void window.api.instance.getSettings(versionId)
+      .then((v) => {
+        if (on) {
+          setVs(v)
+          setLoaded(true)
+        }
+      })
+      .catch((e) => {
+        if (on) {
+          toast((e as Error).message, 'err')
+          setLoaded(true)
+        }
+      })
+    return () => {
+      on = false
+    }
   }, [versionId])
 
   const save = async (patch: Partial<VersionSettings>): Promise<void> => {
-    const next = await window.api.instance.setSettings(versionId, patch)
-    setVs(next)
-    toast('已保存', 'ok')
+    const req = ++saveReq.current
+    try {
+      const next = await window.api.instance.setSettings(versionId, patch)
+      if (req !== saveReq.current) return
+      setVs(next)
+      toast('已保存', 'ok')
+    } catch (e) {
+      if (req === saveReq.current) toast(`保存失败：${(e as Error).message}`, 'err')
+    }
   }
 
   if (!loaded) return <div className="center-box"><Spinner size={18} /></div>
@@ -347,15 +384,19 @@ function InstanceSettings({ versionId }: { versionId: string }) {
 
 function ModifyPane({ versionId, components, onChanged }: { versionId: string; components: VersionComponent[]; onChanged: () => void }) {
   const { toast, setPage, openInstance, reloadLocal } = useApp()
+  const safeOpen = (p: Promise<unknown>): void => { void p.catch((e) => toast(`打开失败：${(e as Error).message}`, 'err')) }
   const [confirm, setConfirm] = useState<VersionComponent | null>(null)
   const [busy, setBusy] = useState(false)
   const [newName, setNewName] = useState('')
   const [renameErr, setRenameErr] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
 
   const doRename = async (): Promise<void> => {
+    if (renaming) return
     setRenameErr(null)
     const target = newName.trim()
     if (!target || target === versionId) return
+    setRenaming(true)
     try {
       const id = await window.api.instance.rename(versionId, target)
       toast(`已改名成 ${id}`, 'ok')
@@ -363,6 +404,8 @@ function ModifyPane({ versionId, components, onChanged }: { versionId: string; c
       openInstance(id)
     } catch (e) {
       setRenameErr((e as Error).message)
+    } finally {
+      setRenaming(false)
     }
   }
 
@@ -407,7 +450,7 @@ function ModifyPane({ versionId, components, onChanged }: { versionId: string; c
           <button className="ghost-btn" onClick={() => setPage('downloads')}>
             <Icon name="download" size={14} /> 去下载页换加载器
           </button>
-          <button className="ghost-btn" onClick={() => void window.api.instance.openFolder(versionId, 'mods')}>
+          <button className="ghost-btn" onClick={() => safeOpen(window.api.instance.openFolder(versionId, 'mods'))}>
             <Icon name="folder" size={14} /> 打开实例目录
           </button>
         </div>
@@ -424,9 +467,9 @@ function ModifyPane({ versionId, components, onChanged }: { versionId: string; c
             placeholder="新的实例名字"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void doRename()}
+            onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && void doRename()}
           />
-          <button className="primary-btn" disabled={!newName.trim() || newName.trim() === versionId} onClick={() => void doRename()}>
+          <button className="primary-btn" disabled={!newName.trim() || newName.trim() === versionId || renaming} onClick={() => void doRename()}>
             改名
           </button>
         </div>
@@ -444,9 +487,14 @@ function ModifyPane({ versionId, components, onChanged }: { versionId: string; c
             className="danger-btn"
             onClick={async () => {
               if (!window.confirm(`确定重置 ${versionId}？实例目录会被删掉。`)) return
-              await window.api.versions.remove(versionId)
-              toast('已删除，请重新安装')
-              setPage('downloads')
+              try {
+                await window.api.versions.remove(versionId)
+                await reloadLocal()
+                toast('已删除，请重新安装')
+                setPage('downloads')
+              } catch (e) {
+                toast(`删除失败：${(e as Error).message}`, 'err')
+              }
             }}
           >
             重置实例
@@ -480,6 +528,7 @@ function ModifyPane({ versionId, components, onChanged }: { versionId: string; c
 
 function ExportPane({ versionId, components }: { versionId: string; components: VersionComponent[] }) {
   const { toast } = useApp()
+  const safeOpen = (p: Promise<unknown>): void => { void p.catch((e) => toast(`打开失败：${(e as Error).message}`, 'err')) }
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
@@ -530,7 +579,7 @@ function ExportPane({ versionId, components }: { versionId: string; components: 
         {result && (
           <p className="ok small" style={{ marginTop: 10 }}>
             已保存：{result}
-            <button className="ghost-btn" style={{ marginLeft: 8, height: 24 }} onClick={() => void window.api.openPath(result)}>
+            <button className="ghost-btn" style={{ marginLeft: 8, height: 24 }} onClick={() => safeOpen(window.api.openPath(result))}>
               打开
             </button>
           </p>
@@ -549,7 +598,7 @@ function ExportPane({ versionId, components }: { versionId: string; components: 
         </div>
         {imported && (
           <p className="ok small" style={{ marginTop: 10 }}>
-            已导入成实例「{imported.versionId}」（{imported.files} 个文件）→ 去「版本」页能看到它
+            已导入成实例「{imported.versionId}」（{imported.files} 个文件）→ 去「下载」页能看到它
           </p>
         )}
       </div>
@@ -569,6 +618,7 @@ const KIND_LABEL: Record<InstanceFileKind, string> = {
 
 function FilePane({ versionId, kind }: { versionId: string; kind: InstanceFileKind }) {
   const { toast } = useApp()
+  const safeOpen = (p: Promise<unknown>): void => { void p.catch((e) => toast(`打开失败：${(e as Error).message}`, 'err')) }
   const requestRef = useRef(0)
   const [files, setFiles] = useState<InstanceFile[]>([])
   const [loading, setLoading] = useState(true)
@@ -598,7 +648,7 @@ function FilePane({ versionId, kind }: { versionId: string; kind: InstanceFileKi
     <div className="inst-card">
       <div className="inst-card-title">
         {KIND_LABEL[kind]}（{files.length}）
-        <button className="ghost-btn" style={{ marginLeft: 10, height: 24 }} onClick={() => void window.api.instance.openFolder(versionId, kind)}>
+        <button className="ghost-btn" style={{ marginLeft: 10, height: 24 }} onClick={() => safeOpen(window.api.instance.openFolder(versionId, kind))}>
           打开文件夹
         </button>
       </div>
@@ -626,15 +676,19 @@ function FilePane({ versionId, kind }: { versionId: string; kind: InstanceFileKi
                   <button
                     className="ghost-btn"
                     onClick={async () => {
-                      await window.api.instance.toggle(f.path)
-                      toast(f.enabled ? '已禁用' : '已启用')
-                      await load()
+                      try {
+                        await window.api.instance.toggle(f.path)
+                        toast(f.enabled ? '已禁用' : '已启用')
+                        await load()
+                      } catch (e) {
+                        toast(`操作失败：${(e as Error).message}`, 'err')
+                      }
                     }}
                   >
                     {f.enabled ? '禁用' : '启用'}
                   </button>
                 )}
-                <button className="ghost-btn" onClick={() => void window.api.openPath(f.path)}>
+                <button className="ghost-btn" onClick={() => safeOpen(window.api.openPath(f.path))}>
                   打开
                 </button>
                 <button className="icon-btn danger" onClick={() => setConfirm(f)}>
@@ -658,10 +712,14 @@ function FilePane({ versionId, kind }: { versionId: string; kind: InstanceFileKi
               <button
                 className="danger-btn"
                 onClick={async () => {
-                  await window.api.instance.deleteFiles([confirm.path])
-                  setConfirm(null)
-                  toast('已删除')
-                  await load()
+                  try {
+                    await window.api.instance.deleteFiles([confirm.path])
+                    setConfirm(null)
+                    toast('已删除')
+                    await load()
+                  } catch (e) {
+                    toast(`操作失败：${(e as Error).message}`, 'err')
+                  }
                 }}
               >
                 删除
@@ -684,15 +742,18 @@ function ServerPane({ versionId }: { versionId: string }) {
   const [name, setName] = useState('')
   const [ip, setIp] = useState('')
   const [confirm, setConfirm] = useState<ServerEntry | null>(null)
+  const requestRef = useRef(0)
 
   const load = async (): Promise<void> => {
+    const request = ++requestRef.current
     setLoading(true)
     try {
-      setServers(await window.api.servers.list(versionId))
+      const next = await window.api.servers.list(versionId)
+      if (request === requestRef.current) setServers(next)
     } catch (e) {
-      toast(`读取服务器列表失败：${(e as Error).message}`, 'err')
+      if (request === requestRef.current) toast(`读取服务器列表失败：${(e as Error).message}`, 'err')
     } finally {
-      setLoading(false)
+      if (request === requestRef.current) setLoading(false)
     }
   }
 
@@ -724,7 +785,7 @@ function ServerPane({ versionId }: { versionId: string }) {
 
       <div className="server-add">
         <input className="input" placeholder="名称（可留空）" value={name} onChange={(e) => setName(e.target.value)} />
-        <input className="input" placeholder="地址，例如 play.example.com" value={ip} onChange={(e) => setIp(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void add()} />
+        <input className="input" placeholder="地址，例如 play.example.com" value={ip} onChange={(e) => setIp(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && void add()} />
         <button className="primary-btn" onClick={() => void add()}>
           <Icon name="plus" size={14} /> 添加
         </button>
@@ -742,8 +803,8 @@ function ServerPane({ versionId }: { versionId: string }) {
 
       {!loading && servers.length > 0 && (
         <div className="file-list">
-          {servers.map((s) => (
-            <div key={s.ip} className="file-row">
+          {servers.map((s, i) => (
+            <div key={`${s.ip}-${i}`} className="file-row">
               {s.icon ? (
                 <img className="server-icon" src={s.icon} alt="" />
               ) : (

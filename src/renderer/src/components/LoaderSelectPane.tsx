@@ -24,12 +24,21 @@ const LOADERS: Entry[] = [
 type Status = 'loading' | 'available' | 'installed' | 'none' | 'unsupported'
 
 export default function LoaderSelectPane({ mc, onBack, onPick }: { mc: string; onBack: () => void; onPick: (type: string) => void }) {
-  const [mounted, setMounted] = useState<Record<string, LoaderVersionInfo[] | null>>({})
+  const [mounted, setMounted] = useState<Record<string, LoaderVersionInfo[]>>({})
   const [errors, setErrors] = useState<Record<string, boolean>>({})
   const [installedLoaders, setInstalledLoaders] = useState<{ versionId: string; type: string; mcVersion: string }[]>([])
 
   useEffect(() => {
-    void window.api.loaders.installed().then(setInstalledLoaders)
+    let alive = true
+    void window.api.loaders
+      .installed()
+      .then((list) => {
+        if (alive) setInstalledLoaders(list)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
   }, [])
 
   useEffect(() => {
@@ -55,7 +64,7 @@ export default function LoaderSelectPane({ mc, onBack, onPick }: { mc: string; o
     const list = mounted[id]
     const installed = installedLoaders.find((x) => x.mcVersion === mc && x.type === id)
     if (errors[id]) return 'unsupported'
-    if (list === null || list === undefined) return installed ? 'installed' : 'loading'
+    if (list === undefined) return installed ? 'installed' : 'loading'
     if (list.length === 0) return 'none'
     if (installed) return 'installed'
     return 'available'
