@@ -6,6 +6,57 @@ import { Icon, Switch } from '../components/ui'
 /** 常用强调色，点一下就能换 */
 const ACCENT_PRESETS = ['#1663bc', '#0f766e', '#7c3aed', '#b4243a', '#b45309', '#164e63']
 
+/** 鸣谢名单：用了谁的东西、按什么许可、去哪儿找 */
+const CREDITS: { name: string; by?: string; desc: string; url?: string }[] = [
+  {
+    name: 'Terracotta | 陶瓦联机',
+    by: 'Burning_TNT',
+    desc: '联机功能。AGPL-3.0-or-later（附例外条款）授权；本启动器只通过它的本机 HTTP 接口与未经修改的程序交互。',
+    url: 'https://burningtnt.github.io/Terracotta/'
+  },
+  {
+    name: 'BMCLAPI',
+    by: 'bangbang93',
+    desc: 'Minecraft 下载镜像，国内拉版本和资源快很多。',
+    url: 'https://bmclapi.bangbang93.com/'
+  },
+  {
+    name: 'MCIM',
+    by: 'Mystic-Stars',
+    desc: 'CurseForge 镜像。模组、整合包、地图都靠它，不需要 API Key。',
+    url: 'https://mod.mcimirror.top/'
+  },
+  {
+    name: 'Modrinth',
+    desc: '模组 / 整合包 / 资源包 / 光影的搜索与下载。',
+    url: 'https://modrinth.com/'
+  },
+  {
+    name: 'authlib-injector',
+    by: 'yushijinhun',
+    desc: '外置登录（第三方认证服务器）就靠它注入。',
+    url: 'https://github.com/yushijinhun/authlib-injector'
+  },
+  {
+    name: '模组加载器',
+    by: 'Fabric / Quilt / Forge / NeoForge / OptiFine',
+    desc: '各加载器的安装逻辑与版本信息来自它们各自的项目。',
+    url: 'https://fabricmc.net/'
+  },
+  {
+    name: 'Minecraft: Java Edition',
+    by: 'Mojang Studios / Microsoft',
+    desc: '游戏本体、版本清单、资源与正版账号认证。',
+    url: 'https://www.minecraft.net/'
+  },
+  {
+    name: 'Electron / React / TypeScript',
+    by: '开源社区',
+    desc: '启动器的技术栈；打包用 electron-builder + NSIS + Rollup。',
+    url: 'https://www.electronjs.org/'
+  }
+]
+
 export default function Settings() {
   const { settings, saveSettings, toast } = useApp()
   const [javas, setJavas] = useState<JavaRuntimeInfo[]>([])
@@ -521,6 +572,35 @@ export default function Settings() {
           <Icon name="globe" size={14} /> 项目主页
         </button>
       </div>
+
+      <section className="set-group">
+        <div className="set-title">鸣谢</div>
+        <div className="credits-grid">
+          {CREDITS.map((c) => (
+            <div className="credit-card" key={c.name}>
+              <div className="credit-head">{c.name}</div>
+              {c.by && <div className="credit-by">{c.by}</div>}
+              <div className="credit-desc">{c.desc}</div>
+              {c.url && (
+                <button className="credit-link" onClick={() => void window.api.openExternal(c.url!)}>
+                  打开主页 →
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="set-row">
+          <div className="set-label">
+            还有
+            <span className="set-desc">谢谢帮忙测试、报 bug、提建议的每一位。本启动器以 Apache-2.0 授权。</span>
+          </div>
+          <div className="set-control">
+            <button className="ghost-btn" onClick={() => void window.api.openExternal('https://github.com/qrtq1/feiyu-launcher')}>
+              <Icon name="globe" size={14} /> 源码仓库
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }
