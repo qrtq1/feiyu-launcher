@@ -151,7 +151,15 @@ async function main(): Promise<void> {
     let wait = Math.max(1, info.interval || 5)
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, wait * 1000))
-      const r = await pollDeviceCode(info.deviceCode, '')
+      let r: Awaited<ReturnType<typeof pollDeviceCode>>
+      try {
+        r = await pollDeviceCode(info.deviceCode, '')
+      } catch (e) {
+        // 网络抖动（代理 / 超时）别把整个登录弄死，接着轮询
+        log(`  轮询失败，重试：${(e as Error).message}`)
+        wait = Math.min(wait + 1, 15)
+        continue
+      }
       if (r.status === 'pending') {
         if (r.message === 'slow_down') wait += 2
         continue
