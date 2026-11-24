@@ -140,6 +140,7 @@ const api = {
   },
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
   openPath: (p: string) => ipcRenderer.invoke(IPC.openPath, p),
+  reveal: (kind: 'data' | 'exports' | 'config' | 'log') => ipcRenderer.invoke(IPC.reveal, kind),
   window: {
     minimize: () => ipcRenderer.send(IPC.windowMin),
     toggleMaximize: () => ipcRenderer.send(IPC.windowMax),

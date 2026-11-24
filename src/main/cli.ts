@@ -140,6 +140,27 @@ async function main(): Promise<void> {
     log(`expires_in   = ${info.expiresIn}s  interval=${info.interval}s`)
     const r = await pollDeviceCode(info.deviceCode, '')
     log(`首次轮询返回 = ${JSON.stringify(r)}`)
+  } else if (cmd === 'ms-login') {
+    // 真实登录冒烟：打印设备码，等人去浏览器确认，成功后账号落盘
+    log('申请微软设备码（请去浏览器输入下面的代码）……')
+    const info = await startDeviceCode('')
+    log(`user_code    = ${info.userCode}`)
+    log(`verify_uri   = ${info.verificationUri}`)
+    log(`有效期 ${info.expiresIn}s，登录完成后这里会自动继续。`)
+    const deadline = Date.now() + info.expiresIn * 1000
+    let wait = Math.max(1, info.interval || 5)
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, wait * 1000))
+      const r = await pollDeviceCode(info.deviceCode, '')
+      if (r.status === 'pending') {
+        if (r.message === 'slow_down') wait += 2
+        continue
+      }
+      if (r.status === 'error') throw new Error(r.message)
+      log(`登录成功: ${r.account?.name} (${r.account?.uuid}) type=${r.account?.type}`)
+      return
+    }
+    throw new Error('设备码过期，没等到登录')
   } else if (cmd === 'loader-list') {
     const [type, mc] = rest
     if (!type || !mc) throw new Error('用法: loader-list <fabric|quilt|forge|neoforge|optifine> <mcVersion>')

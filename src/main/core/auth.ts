@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Account, DeviceCodeInfo } from '../../shared/types'
+import { BUILTIN_MSA_CLIENT_ID } from '../../shared/api'
 import { fetchJson } from './http'
 import { addAccount, listAccounts, updateAccount } from './store'
 
@@ -25,8 +26,8 @@ interface AuthEndpoint {
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function resolveAuthEndpoint(clientId: string): AuthEndpoint {
-  const cid = (clientId ?? '').trim()
-  if (!cid) return { host: LIVE_HOST, clientId: DEFAULT_CLIENT_ID, mode: 'live' }
+  // 留空 = 用内置的应用注册（GUID 走 Azure AD v2.0 设备码）
+  const cid = (clientId ?? '').trim() || BUILTIN_MSA_CLIENT_ID
   if (GUID_RE.test(cid)) return { host: AZURE_HOST, clientId: cid, mode: 'azure' }
   return { host: LIVE_HOST, clientId: cid, mode: 'live' }
 }

@@ -1071,6 +1071,20 @@ async function registerIpc(): Promise<void> {
     const error = await shell.openPath(assertInsideData(p, '打开'))
     if (error) throw new Error(`无法打开路径：${error}`)
   })
+  ipcMain.handle(IPC.reveal, async (_e, kind: string) => {
+    // 只认下面这几个固定目标，不接受任意路径
+    if (kind === 'config' || kind === 'log') {
+      const file = kind === 'config' ? join(P.root, 'launcher-store.json') : BOOT_LOG_FILE
+      if (!existsSync(file)) throw new Error('这个文件还不存在')
+      shell.showItemInFolder(file)
+      return
+    }
+    const dir = kind === 'data' ? P.root : kind === 'exports' ? join(P.root, 'exports') : ''
+    if (!dir) throw new Error('未知的目录')
+    await fs.mkdir(dir, { recursive: true })
+    const error = await shell.openPath(dir)
+    if (error) throw new Error(`无法打开目录：${error}`)
+  })
 
   // ---- 窗口控制 ----
   ipcMain.on(IPC.windowMin, () => mainWindow?.minimize())

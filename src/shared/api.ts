@@ -76,6 +76,7 @@ export const IPC = {
   windowMax: 'window:max',
   windowClose: 'window:close',
   resolveMedia: 'media:resolve',
+  reveal: 'shell:reveal',
   mpStatus: 'mp:status',
   mpAgree: 'mp:agree',
   mpInstall: 'mp:install',
@@ -93,6 +94,9 @@ export const IPC = {
   evStatus: 'ev:status'
 } as const
 
+/** 内置的微软登录应用（Azure 应用注册，支持设备码授权；配置里留空就用它） */
+export const BUILTIN_MSA_CLIENT_ID = 'b1faa027-8ad8-4089-a510-9c708e95bd89'
+
 export const DEFAULT_SETTINGS: Omit<Settings, 'gameDir'> = {
   versionsDir: '',
   curseforgeApiKey: '',
@@ -108,7 +112,7 @@ export const DEFAULT_SETTINGS: Omit<Settings, 'gameDir'> = {
   versionIsolation: true,
   fullscreen: false,
   closeOnLaunch: false,
-  msaClientId: '',
+  msaClientId: BUILTIN_MSA_CLIENT_ID,
   backgroundPath: '',
   backgroundKind: 'none',
   accentColor: '#1663bc'

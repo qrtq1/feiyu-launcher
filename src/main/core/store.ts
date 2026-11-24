@@ -1,7 +1,7 @@
 import { safeStorage } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DEFAULT_SETTINGS } from '../../shared/api'
+import { BUILTIN_MSA_CLIENT_ID, DEFAULT_SETTINGS } from '../../shared/api'
 import type { Account, FavoriteItem, Settings, VersionSettings } from '../../shared/types'
 import { setExtraJavaPaths } from './java'
 import { dataRoot, defaultGameDir, setGameDir, setVersionsDir } from './paths'
@@ -163,7 +163,10 @@ function save(): Promise<void> {
 
 export async function getSettings(): Promise<Settings> {
   const s = await loadStore()
-  return { ...s.settings }
+  const settings = { ...s.settings }
+  // 老配置里是空串：界面显示内置的登录应用，而不是一片空白
+  if (!settings.msaClientId) settings.msaClientId = BUILTIN_MSA_CLIENT_ID
+  return settings
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {

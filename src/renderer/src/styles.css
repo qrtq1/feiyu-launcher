@@ -888,6 +888,22 @@ a {
   background: var(--panel);
   cursor: pointer;
 }
+.accent-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(24, 50, 74, 0.18);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.accent-dot:hover {
+  transform: scale(1.12);
+}
+.accent-dot.on {
+  border-color: var(--panel);
+  box-shadow: 0 0 0 2px var(--text);
+}
 .color-value {
   min-width: 78px;
   text-align: center;

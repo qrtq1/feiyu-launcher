@@ -3,12 +3,17 @@ import type { JavaRuntimeInfo } from '../../../shared/types'
 import { useApp } from '../store'
 import { Icon, Switch } from '../components/ui'
 
+/** 常用强调色，点一下就能换 */
+const ACCENT_PRESETS = ['#1663bc', '#0f766e', '#7c3aed', '#b4243a', '#b45309', '#164e63']
+
 export default function Settings() {
   const { settings, saveSettings, toast } = useApp()
   const [javas, setJavas] = useState<JavaRuntimeInfo[]>([])
   const [loadingJava, setLoadingJava] = useState(false)
   const [picking, setPicking] = useState(false)
   const [pickingBackground, setPickingBackground] = useState(false)
+  const [platform, setPlatform] = useState<{ os: string; arch: string; version: string; userData: string } | null>(null)
+  const version = platform?.version
 
   const reloadJava = async (): Promise<void> => {
     setLoadingJava(true)
@@ -21,6 +26,7 @@ export default function Settings() {
 
   useEffect(() => {
     void reloadJava()
+    void window.api.platform().then(setPlatform).catch(() => undefined)
   }, [])
 
   if (!settings) return <div className="page" />
@@ -161,6 +167,16 @@ export default function Settings() {
           <div className="set-control">
             <input className="color-input" type="color" value={settings.accentColor} onChange={(e) => set({ accentColor: e.target.value })} aria-label="选择强调色" />
             <span className="path-box color-value">{settings.accentColor}</span>
+            {ACCENT_PRESETS.map((c) => (
+              <button
+                key={c}
+                className={`accent-dot${settings.accentColor.toLowerCase() === c ? ' on' : ''}`}
+                style={{ background: c }}
+                title={`用 ${c}`}
+                aria-label={`强调色 ${c}`}
+                onClick={() => set({ accentColor: c })}
+              />
+            ))}
             <button className="ghost-btn" onClick={() => set({ accentColor: '#1663bc' })}>恢复默认</button>
           </div>
         </div>
@@ -441,24 +457,6 @@ export default function Settings() {
           </div>
         </div>
         <div className="set-row">
-          <div className="set-label">
-            CurseForge API Key
-            <span className="set-desc">下载地图（世界存档）要用；在 console.curseforge.com 免费申请</span>
-          </div>
-          <div className="set-control wide">
-            <input
-              className="input"
-              type="password"
-              value={settings.curseforgeApiKey}
-              placeholder="留空 = 不用在线地图下载（仍可导入本地地图包）"
-              onChange={(e) => set({ curseforgeApiKey: e.target.value })}
-            />
-            <button className="ghost-btn" onClick={() => void window.api.openExternal('https://console.curseforge.com/#/api-keys')}>
-              申请
-            </button>
-          </div>
-        </div>
-        <div className="set-row">
           <div className="set-label">并发下载数</div>
           <div className="set-control">
             <input
@@ -474,14 +472,36 @@ export default function Settings() {
       </section>
 
       <section className="set-group">
-        <div className="set-title">微软登录</div>
+        <div className="set-title">维护</div>
         <div className="set-row">
           <div className="set-label">
-            Azure 客户端 ID
-            <span className="set-desc">留空用内置公共 ID；用自己的应用更稳</span>
+            打开目录
+            <span className="set-desc">排查问题、备份数据、拿导出的实例包，都从这里进</span>
           </div>
-          <div className="set-control wide">
-            <input className="input" value={settings.msaClientId} placeholder="Application (client) ID" onChange={(e) => set({ msaClientId: e.target.value })} />
+          <div className="set-control">
+            <button className="ghost-btn" onClick={() => void window.api.reveal('data')}>
+              <Icon name="folder" size={14} /> 数据目录
+            </button>
+            <button className="ghost-btn" onClick={() => void window.api.reveal('exports')}>
+              <Icon name="box" size={14} /> 导出目录
+            </button>
+            <button className="ghost-btn" onClick={() => void window.api.reveal('config')}>
+              <Icon name="settings" size={14} /> 配置文件
+            </button>
+            <button className="ghost-btn" onClick={() => void window.api.reveal('log')}>
+              <Icon name="terminal" size={14} /> 启动日志
+            </button>
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">
+            恢复默认外观
+            <span className="set-desc">背景和强调色回到初始状态，其他设置一律不动</span>
+          </div>
+          <div className="set-control">
+            <button className="ghost-btn" onClick={() => set({ backgroundPath: '', backgroundKind: 'none', accentColor: '#1663bc' })}>
+              恢复默认
+            </button>
           </div>
         </div>
       </section>
@@ -489,9 +509,17 @@ export default function Settings() {
       <div className="about-box">
         <Icon name="fish" size={16} />
         <div>
-          <div>肥鱼启动器 0.1.0</div>
+          <div>肥鱼启动器 {version ?? ''}</div>
           <div className="muted tiny">从零写起的 Minecraft 启动器 · Electron + React + TypeScript</div>
+          {platform && (
+            <div className="muted tiny">
+              {platform.os} / {platform.arch} · 数据在 {platform.userData}
+            </div>
+          )}
         </div>
+        <button className="ghost-btn" onClick={() => void window.api.openExternal('https://github.com/qrtq1/feiyu-launcher')}>
+          <Icon name="globe" size={14} /> 项目主页
+        </button>
       </div>
     </div>
   )

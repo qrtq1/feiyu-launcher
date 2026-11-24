@@ -541,6 +541,8 @@ export interface Api {
   onLaunchProgress(cb: (p: LaunchProgress) => void): () => void
   openExternal(url: string): Promise<void>
   openPath(p: string): Promise<void>
+  /** 打开数据目录 / 导出目录 / 配置文件 / 启动日志 */
+  reveal(kind: 'data' | 'exports' | 'config' | 'log'): Promise<void>
   window: {
     minimize(): void
     toggleMaximize(): void

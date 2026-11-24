@@ -1,6 +1,6 @@
 {
   "name": "feiyu-launcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "肥鱼启动器 - 一个从零写起的 Minecraft 启动器",
   "main": "./out/main/index.js",
   "author": "feiyu",
