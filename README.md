@@ -75,6 +75,14 @@ node scripts/build.mjs
 node node_modules/electron-builder/out/cli/cli.js --linux dir tar.gz
 ```
 
+在 Windows 上打出来的 tar.gz 里所有文件都是 0644，Linux 解压后 `./feiyu-launcher` 跑不起来，补一下权限位：
+
+```bash
+python scripts/fix-linux-tar.py dist/feiyu-launcher-<版本>.tar.gz
+```
+
+（会重写成 `-linux-x64.tar.gz`，`feiyu-launcher` / `chrome_crashpad_handler` 给 0755，`chrome-sandbox` 给 4755。在 Linux 上原生打包不需要这一步。）
+
 常见坑：Ubuntu 23.10+ 默认关闭了非特权 user namespace，AppImage 会启动失败，需要 `--no-sandbox` 或 `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
 
 ## 怎么跑
