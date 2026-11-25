@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { offlineUuid, resolveAuthEndpoint } from '../src/main/core/auth'
+import { BUILTIN_MSA_CLIENT_ID } from '../src/shared/api'
 
 test('offlineUuid 是确定性的 v3 UUID', () => {
   const a = offlineUuid('Steve')
@@ -13,10 +14,12 @@ test('offlineUuid 区分大小写且不同名不同值', () => {
   assert.notEqual(offlineUuid('Steve'), offlineUuid('Alex'))
 })
 
-test('resolveAuthEndpoint 空 clientId 回落到官方公共客户端', () => {
+test('resolveAuthEndpoint 空 clientId 回落到内置应用注册', () => {
   const ep = resolveAuthEndpoint('')
-  assert.equal(ep.mode, 'live')
-  assert.equal(ep.clientId, '00000000402b5328')
+  assert.equal(ep.mode, 'azure')
+  assert.equal(ep.clientId, BUILTIN_MSA_CLIENT_ID)
+  // 只有空白也算没填
+  assert.equal(resolveAuthEndpoint('   ').clientId, BUILTIN_MSA_CLIENT_ID)
 })
 
 test('resolveAuthEndpoint 按 GUID 判定 Azure 端点', () => {

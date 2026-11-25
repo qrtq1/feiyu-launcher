@@ -240,6 +240,18 @@ function Shell() {
 }
 
 export default function App() {
+  // 让 CSS 知道在哪个平台：macOS 要留出红绿灯的位置、藏起自绘的窗口按钮
+  useEffect(() => {
+    let alive = true
+    void window.api.platform()
+      .then((p) => {
+        if (alive) document.documentElement.dataset.os = p.os
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
   return (
     <AppProvider>
       <Shell />

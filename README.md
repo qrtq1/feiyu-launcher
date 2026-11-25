@@ -34,6 +34,49 @@
 | 微软登录 | 🟡 | Live Connect 设备码已打通（拿到 user_code），真账号登录未验证 |
 | 打包 | ✅ | `dist\FeiyuLauncher-Setup-0.1.0.exe`（98 MB NSIS） |
 
+## 32 位（x86）支持
+
+同一份源码能出 32 位包：
+
+| 架构 | 命令 | 产物 |
+|---|---|---|
+| 64 位 | `node scripts/build.mjs` + `electron-builder --win` | `FeiyuLauncher-Setup-<版本>.exe`、`FeiyuLauncher-<版本>-portable.exe` |
+| 32 位 | `pnpm dist:ia32` | 同名的 `-ia32` 后缀包 |
+
+32 位包里额外做了这些事：
+
+- Electron 用 `win32-ia32` 那份（Electron 43 及以前还发；44 起官方不再提供 32 位）
+- Java 运行时取 Mojang 清单里的 `windows-x86`，装在 `runtime/<组件>-x86/`，不和 64 位那套抢目录
+- 内存：自动模式固定 1024 MB，手动最多 2048 MB（32 位 JVM 只有 4 GB 地址空间）
+- natives 按位数挑：`natives-windows`（64 位）/ `natives-windows-x86`（32 位）/ `natives-windows-arm64`，不再三份全下
+- 陶瓦联机只有 64 位构建，32 位包会直接提示不支持
+
+## Linux 支持
+
+Linux 上能做的是**带 Electron 的绿色包**和 AppImage / deb，代码里已经按 Linux 处理好：
+
+- 数据目录：`~/.local/share/feiyu-launcher`（XDG 规范）。Windows 那套「数据跟着 exe 走」在 AppImage 里不成立——exe 在只读挂载点，所以非 Windows 一律走系统目录
+- Java 运行时取 Mojang 清单里的 `linux` / `linux-i386`，下载完给 `bin/java` 补 `0o755` 执行位（manifest 里 `executable` 标记的文件都补）
+- 陶瓦联机解出来的可执行文件同样补执行位
+- 路径分隔符、natives 分类器（`natives-linux` / `-x86` / `-arm64`）都按平台走
+- 打包目标：AppImage、deb、tar.gz
+
+在 Linux 上打包：
+
+```bash
+pnpm dist:linux
+```
+
+在 Windows 上只能出 `dir` + `tar.gz`（AppImage / deb 依赖 Linux 侧的 appimagetool、dpkg 等工具，没有 Docker 就别指望）：
+
+```bash
+node scripts/fetch-electron.mjs --platform=linux --arch=x64
+node scripts/build.mjs
+node node_modules/electron-builder/out/cli/cli.js --linux dir tar.gz
+```
+
+常见坑：Ubuntu 23.10+ 默认关闭了非特权 user namespace，AppImage 会启动失败，需要 `--no-sandbox` 或 `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
+
 ## 怎么跑
 
 ```bash

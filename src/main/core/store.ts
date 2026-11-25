@@ -166,6 +166,8 @@ export async function getSettings(): Promise<Settings> {
   const settings = { ...s.settings }
   // 老配置里是空串：界面显示内置的登录应用，而不是一片空白
   if (!settings.msaClientId) settings.msaClientId = BUILTIN_MSA_CLIENT_ID
+  // 老配置里没有这个字段：按自动模式处理，界面上总能看到一个明确的数
+  if (settings.memoryMode !== 'auto' && settings.memoryMode !== 'manual') settings.memoryMode = 'auto'
   return settings
 }
 

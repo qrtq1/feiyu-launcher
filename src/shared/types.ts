@@ -122,6 +122,9 @@ export interface Settings {
   /** 用户手动添加的 Java 可执行文件路径，和自动探测的一起参与挑选 */
   extraJavaPaths: string[]
   javaPath: string | null
+  /** 内存分配模式：auto 按物理内存自动算，manual 用下面两个值 */
+  memoryMode: 'auto' | 'manual'
+  /** 最大堆（MB）；自动模式下这两个值只在切回手动时当默认值 */
   maxMemory: number
   minMemory: number
   jvmArgs: string
@@ -190,6 +193,8 @@ export interface JavaRuntimeInfo {
   version: string
   major: number
   source: 'system' | 'mojang' | 'custom'
+  /** java 报告的 os.arch：x86 = 32 位，amd64/x86_64 = 64 位 */
+  arch?: string
 }
 
 export interface LogLine {
@@ -416,7 +421,7 @@ export interface TerracottaStatus {
 }
 
 export interface Api {
-  platform: () => Promise<{ os: string; arch: string; version: string; userData: string }>
+  platform: () => Promise<{ os: string; arch: string; version: string; userData: string; totalMem: number; freeMem: number }>
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings>): Promise<Settings>

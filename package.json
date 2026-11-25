@@ -1,6 +1,6 @@
 {
   "name": "feiyu-launcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "肥鱼启动器 - 一个从零写起的 Minecraft 启动器",
   "main": "./out/main/index.js",
   "author": "feiyu",
@@ -17,7 +17,9 @@
     "pack": "node scripts/build.mjs && electron-builder --dir",
     "pack:green": "node scripts/build.mjs && electron-builder --dir && node scripts/greenify.mjs",
     "pack:sfx": "node scripts/build.mjs && electron-builder --dir && node scripts/build-sfx.mjs",
-    "dist": "node scripts/build.mjs && electron-builder"
+    "dist": "node scripts/build.mjs && electron-builder",
+    "dist:ia32": "node scripts/fetch-electron.mjs --arch=ia32 && node scripts/build.mjs && node node_modules/electron-builder/out/cli/cli.js --win --config electron-builder.ia32.yml",
+    "dist:linux": "node scripts/fetch-electron.mjs --platform=linux --arch=x64 && node scripts/build.mjs && node node_modules/electron-builder/out/cli/cli.js --linux"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

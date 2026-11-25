@@ -103,6 +103,7 @@ export const DEFAULT_SETTINGS: Omit<Settings, 'gameDir'> = {
   extraVersionDirs: [],
   extraJavaPaths: [],
   javaPath: null,
+  memoryMode: 'auto',
   maxMemory: 4096,
   minMemory: 512,
   jvmArgs: '',

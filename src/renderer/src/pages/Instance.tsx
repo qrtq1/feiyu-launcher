@@ -312,7 +312,9 @@ function InstanceSettings({ versionId }: { versionId: string }) {
         <div className="set-row">
           <div className="set-label">
             最大内存
-            <span className="set-desc">留空 = 跟随全局（{settings?.maxMemory ?? '—'} MB）</span>
+            <span className="set-desc">
+              {settings?.memoryMode === 'auto' ? '留空 = 跟随全局（自动）' : `留空 = 跟随全局（${settings?.maxMemory ?? '—'} MB）`}
+            </span>
           </div>
           <div className="set-control">
             <input
@@ -320,7 +322,7 @@ function InstanceSettings({ versionId }: { versionId: string }) {
               type="number"
               min={512}
               step={256}
-              placeholder={String(settings?.maxMemory ?? 4096)}
+              placeholder={settings?.memoryMode === 'auto' ? '自动' : String(settings?.maxMemory ?? 4096)}
               value={vs.maxMemory ?? ''}
               onChange={(e) => setVs({ ...vs, maxMemory: e.target.value ? Number(e.target.value) : undefined })}
             />
@@ -330,7 +332,7 @@ function InstanceSettings({ versionId }: { versionId: string }) {
         <div className="set-row">
           <div className="set-label">
             最小内存
-            <span className="set-desc">留空 = 跟随全局</span>
+            <span className="set-desc">留空 = 跟随全局{settings?.memoryMode === 'auto' ? '（自动 512 MB）' : ''}</span>
           </div>
           <div className="set-control">
             <input
@@ -338,7 +340,7 @@ function InstanceSettings({ versionId }: { versionId: string }) {
               type="number"
               min={0}
               step={256}
-              placeholder={String(settings?.minMemory ?? 512)}
+              placeholder={settings?.memoryMode === 'auto' ? '自动' : String(settings?.minMemory ?? 512)}
               value={vs.minMemory ?? ''}
               onChange={(e) => setVs({ ...vs, minMemory: e.target.value ? Number(e.target.value) : undefined })}
             />

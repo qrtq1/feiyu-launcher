@@ -1,0 +1,38 @@
+# 32 位（x86）构建。
+# electron-builder 的 electronDist 是全局的、没法按 arch 分别指定，
+# 所以 32 位单独跑这一份配置，指到 .cache/electron-ia32/dist（scripts/fetch-electron.mjs --arch=ia32 解出来的）。
+appId: com.feiyu.launcher
+productName: 肥鱼启动器
+copyright: MIT Licensed
+directories:
+  output: dist
+  buildResources: build
+electronDist: .cache/electron-ia32/dist
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+asar: true
+compression: normal
+win:
+  target:
+    - target: nsis
+      arch:
+        - ia32
+    - target: portable
+      arch:
+        - ia32
+  icon: build/icon.ico
+  artifactName: FeiyuLauncher-Setup-${version}-ia32.${ext}
+portable:
+  artifactName: FeiyuLauncher-${version}-portable-ia32.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 肥鱼启动器
+  deleteAppDataOnUninstall: false

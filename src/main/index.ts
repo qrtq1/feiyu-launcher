@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { appendFileSync, existsSync, promises as fs, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { freemem, tmpdir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -8,12 +8,13 @@ import { IPC } from '../shared/api'
 import type { DownloadProgress, FavoriteItem, InstanceFileKind, LaunchProgress, LaunchStatus, LogLine, ModFile, ServerEntry, Settings, TerracottaStatus, VersionSettings, WorldMapFile } from '../shared/types'
 import { addOfflineAccount, ensureFreshAccount, pollDeviceCode, refreshMicrosoftAccount, startDeviceCode } from './core/auth'
 import { ensureAuthlibInjector, fetchAuthlibMeta, findAuthlibAccount, loginAuthlib, refreshAuthlib } from './core/authlib'
-import { downloadJavaRuntime, findJava, listJava, probeJava, runtimeComponentFor } from './core/java'
+import { downloadJavaRuntime, findJava, is32BitJavaArch, listJava, probeJava, runtimeComponentFor } from './core/java'
 import { installVersion, isInstalled, readInstalledMark, setSourceLabel, dirSize, InstallCancelled } from './core/install'
 import { getResolvedVersionJson, getVersionJson, getVersionManifest, ensureEffectiveSource, setDownloadSource } from './core/manifest'
 import { downloadFile, ensureDir } from './core/http'
 import { assertInsideData, assertSafeVersionId, ensureGameDirs, externalVersionDir, externalVersionIds, externalVersionRoot, setExternalVersions, P, setGameDir } from './core/paths'
 import { launchGame, LAUNCHER_VERSION, type LaunchHandle } from './core/launch'
+import { MEM_X86_CAP_MB, memoryPlan } from '../shared/memory'
 import { installLoader, listInstalledLoaders, listLoaderVersions, type LoaderType } from './core/loaders'
 import { downloadResource, getResourceVersions, searchResources, targetDirFor, type SearchOptions } from './core/modrinth'
 import { installModpack } from './core/modpack'
@@ -142,7 +143,8 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    frame: false,
+    // macOS 用原生红绿灯（嵌进自绘标题栏），其它平台自绘窗口按钮
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 16 } } : { frame: false }),
     backgroundColor: '#0d1117',
     title: '肥鱼启动器',
     // 窗口/任务栏图标：打包后从 resources 拿，开发时直接用 build 里的
@@ -356,7 +358,9 @@ async function registerIpc(): Promise<void> {
     os: process.platform,
     arch: process.arch,
     version: LAUNCHER_VERSION,
-    userData: app.getPath('userData')
+    userData: app.getPath('userData'),
+    totalMem: totalmem(),
+    freeMem: freemem()
   }))
 
   // ---- 设置 ----
@@ -649,6 +653,7 @@ async function registerIpc(): Promise<void> {
 
     // 实例级设置覆盖全局
     const vs = await getVersionSettings(versionId)
+    // 内存的最终值要等 Java 定下来再算（32 位 Java 得压上限），这里先把实例级覆盖落进 eff
     const eff = {
       ...s,
       maxMemory: vs.maxMemory ?? s.maxMemory,
@@ -692,6 +697,19 @@ async function registerIpc(): Promise<void> {
     }
     if (!java) throw new Error(`找不到可用的 Java ${major}，请在设置里指定，或先下载 Java 运行时`)
     if (java.major < major) throw new Error(`Java 版本太低（需要 ${major}，当前 ${java.major}）`)
+
+    // 内存：自动模式按物理内存算；选中 32 位 Java 就压到 1 GB，不然 -Xmx 会让 JVM 起不来
+    const heap32 = process.arch === 'ia32' || is32BitJavaArch(java.arch)
+    const plan = memoryPlan(s.memoryMode, totalmem(), { maxMemory: eff.maxMemory, minMemory: eff.minMemory }, { arch32: heap32 })
+    const wantMax = vs.maxMemory ?? plan.maxMemory
+    const wantMin = vs.minMemory ?? plan.minMemory
+    s.maxMemory = heap32 ? Math.min(wantMax, MEM_X86_CAP_MB) : wantMax
+    s.minMemory = Math.min(wantMin, s.maxMemory)
+    send(IPC.evLog, {
+      stream: 'launcher',
+      line: `内存：${s.memoryMode === 'auto' ? '自动' : '手动'} ${s.maxMemory} MB（本机 ${Math.round(plan.totalMb)} MB）${heap32 ? '，32 位 Java 上限 2 GB' : ''}，参数 -Xms${s.minMemory}M -Xmx${s.maxMemory}M`,
+      ts: Date.now()
+    } as LogLine)
 
     ensureGameDirs()
     bump('启动 Java 进程', 15)

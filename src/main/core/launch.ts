@@ -10,7 +10,7 @@ import { getResolvedVersionJson } from './manifest'
 import { P } from './paths'
 
 export const LAUNCHER_NAME = 'FeiyuLauncher'
-export const LAUNCHER_VERSION = '0.2.0'
+export const LAUNCHER_VERSION = '0.3.0'
 
 /** 把字符串参数按空格切开，支持双引号包住空格 */
 export function splitArgs(raw: string): string[] {

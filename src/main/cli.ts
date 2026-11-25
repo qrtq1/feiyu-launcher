@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: Settings = {
   extraVersionDirs: [],
   extraJavaPaths: [],
   javaPath: null,
+  memoryMode: 'manual',
   maxMemory: 2048,
   minMemory: 512,
   jvmArgs: '',

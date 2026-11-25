@@ -62,7 +62,7 @@ function readMarker(): InstalledMarker | null {
 
 /** 当前平台的发行包资产名关键字（官方命名：terracotta-<ver>-<os>-<arch>-pkg.tar.gz） */
 function platformKey(): string {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64'
+  const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'ia32' ? 'x86' : 'x86_64'
   if (process.platform === 'win32') return `windows-${arch}`
   if (process.platform === 'darwin') return `macos-${arch}`
   return `linux-${arch}`
@@ -120,11 +120,21 @@ export interface InstallResult {
   version: string
 }
 
+/** 32 位 Windows 上陶瓦只发 64 位包，别去下一个跑不起来的 exe */
+export function multiplayerSupported(): boolean {
+  return process.arch !== 'ia32'
+}
+
+function assertMultiplayerSupported(): void {
+  if (!multiplayerSupported()) throw new Error('陶瓦联机没有 32 位构建，32 位启动器用不了联机；要联机请换 64 位系统 + 64 位启动器')
+}
+
 /** 下载并安装陶瓦联机组件（已安装且非强制时直接返回） */
 export async function installTerracotta(
   onProgress?: (done: number, total: number) => void,
   force = false
 ): Promise<InstallResult> {
+  assertMultiplayerSupported()
   const existing = readMarker()
   if (existing && !force) return { version: existing.version }
 
@@ -160,6 +170,9 @@ export async function installTerracotta(
     exeAbs = join(pkgDir, exeName())
     await fs.copyFile(archive, exeAbs)
   }
+
+  // Linux/macOS 从 tar 包里解出来的可执行文件没有执行位，补上
+  if (process.platform !== 'win32') await fs.chmod(exeAbs, 0o755).catch(() => undefined)
 
   const marker: InstalledMarker = {
     version,
@@ -219,6 +232,7 @@ export interface RunningInfo {
 
 /** 确保陶瓦进程在跑：已有健康实例就复用，否则以集成模式启动 */
 export async function ensureRunning(): Promise<RunningInfo> {
+  assertMultiplayerSupported()
   if (runtime) {
     const meta = await healthy(runtime.port)
     if (meta) return { port: runtime.port, attached: runtime.attached, meta }

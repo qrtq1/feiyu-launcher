@@ -17,3 +17,6 @@ docs/crop.png
 dist-review/
 build-review.log
 .e2e/
+# 截图与临时 user-data（测试产物，不进仓库）
+.shots/
+.shot-data*/

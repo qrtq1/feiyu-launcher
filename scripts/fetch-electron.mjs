@@ -19,19 +19,24 @@ if (!existsSync(pkgPath)) {
 
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
 const version = pkg.version
-const platform = process.platform
-const arch = process.arch
+const platform = (process.argv.slice(2).find((a) => a.startsWith('--platform=')) ?? '').split('=')[1] || process.platform
+// --arch=ia32：下载 32 位 Electron，解到 .cache/electron-ia32，别覆盖本机那份 64 位的
+const archArg = (process.argv.slice(2).find((a) => a.startsWith('--arch=')) ?? '').split('=')[1]
+const platformArg = (process.argv.slice(2).find((a) => a.startsWith('--platform=')) ?? '').split('=')[1]
+const arch = archArg || process.arch
+const cross = arch !== process.arch || (platformArg ? platformArg !== process.platform : false)
 const zipName = `electron-v${version}-${platform}-${arch}.zip`
 const url = `https://npmmirror.com/mirrors/electron/${version}/${zipName}`
 const cacheDir = join(root, '.cache')
 const zipPath = join(cacheDir, zipName)
-const distDir = join(root, 'node_modules', 'electron', 'dist')
-const marker = join(root, 'node_modules', 'electron', 'path.txt')
+const crossDir = join(root, '.cache', `electron-${platform}-${arch}`)
+const distDir = cross ? join(crossDir, 'dist') : join(root, 'node_modules', 'electron', 'dist')
+const marker = cross ? join(crossDir, 'path.txt') : join(root, 'node_modules', 'electron', 'path.txt')
 
 const exeName = platform === 'win32' ? 'electron.exe' : platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'
 
 if (existsSync(marker) && existsSync(join(distDir, exeName.split('/')[0]))) {
-  console.log('Electron 已经装好了:', distDir)
+  console.log(`Electron ${arch} 已经装好了:`, distDir)
   process.exit(0)
 }
 
@@ -69,7 +74,8 @@ if (existsSync(distDir)) {
 mkdirSync(distDir, { recursive: true })
 
 try {
-  if (platform === 'win32') {
+  // 用宿主系统的方式解压：在 Windows 上给 Linux 目标解包也得走 Expand-Archive
+  if (process.platform === 'win32') {
     console.log('解压中……')
     execFileSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${distDir}' -Force`], { stdio: 'inherit' })
   } else {

@@ -26,9 +26,24 @@ interface RuntimeManifest {
   files: Record<string, RuntimeManifestFile>
 }
 
+/** 32 位和 64 位 Java 不能共用一个目录：同一台机器上装两份会互相覆盖 */
+function runtimeDirName(component: string): string {
+  return process.arch === 'ia32' ? `${component}-x86` : component
+}
+
 export function javaExe(component: string): string {
-  const base = join(P.runtime, component, component)
+  const name = runtimeDirName(component)
+  const base = join(P.runtime, name, name)
+  // macOS 的 Mojang 运行时是大 bundle：jre.bundle/Contents/Home/bin/java
+  if (process.platform === 'darwin') return join(base, 'jre.bundle', 'Contents', 'Home', 'bin', 'java')
   return process.platform === 'win32' ? join(base, 'bin', 'java.exe') : join(base, 'bin', 'java')
+}
+
+/** 32 位 JVM 报告 os.arch=x86；amd64 / x86_64 / aarch64 都是 64 位 */
+export function is32BitJavaArch(arch: string | undefined): boolean {
+  if (!arch) return false
+  const a = arch.toLowerCase()
+  return a === 'x86' || a === 'i386' || a === 'i686'
 }
 
 /**
@@ -144,8 +159,13 @@ export async function listJava(): Promise<JavaRuntimeInfo[]> {
     const comps = await fs.readdir(P.runtime, { withFileTypes: true })
     for (const c of comps) {
       if (!c.isDirectory()) continue
-      const exe = javaExe(c.name)
-      if (!existsSync(exe)) continue
+      // 目录名就是组件名（32 位带 -x86 后缀），直接按目录拼，别再走一遍命名规则
+      const base = join(P.runtime, c.name, c.name)
+      const exeCandidates = process.platform === 'win32'
+        ? [join(base, 'bin', 'java.exe')]
+        : [join(base, 'bin', 'java'), join(base, 'jre.bundle', 'Contents', 'Home', 'bin', 'java')]
+      const exe = exeCandidates.find((p) => existsSync(p))
+      if (!exe) continue
       candidates.push({ exe, source: 'mojang' })
     }
   } catch {
@@ -175,7 +195,7 @@ export async function listJava(): Promise<JavaRuntimeInfo[]> {
     try {
       const p = await probeJava(c.exe)
       if (c.source === 'system' && !(p.major >= 8 && p.major < 40)) return null
-      return { path: c.exe, version: p.version, major: p.major, source: c.source }
+      return { path: c.exe, version: p.version, major: p.major, source: c.source, arch: p.arch }
     } catch {
       /* 探测失败 / 路径失效就跳过 */
       return null
@@ -212,16 +232,24 @@ export function runtimeComponentFor(major: number): string {
   return 'java-runtime-epsilon'
 }
 
+/** Mojang 运行时清单里的平台键：32 位 Windows 要拿 windows-x86 那一份（清单里确实有） */
+function runtimeOsKey(): string {
+  if (process.platform === 'win32') return process.arch === 'ia32' ? 'windows-x86' : 'windows-x64'
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'mac-os-arm64' : 'mac-os'
+  return process.arch === 'ia32' ? 'linux-i386' : 'linux'
+}
+
 /** 从 Mojang 下载完整的 Java 运行时 */
 export async function downloadJavaRuntime(component: string, onProgress?: (done: number, total: number, bytesDone: number, bytesTotal: number) => void, isCancelled?: () => boolean): Promise<JavaRuntimeInfo> {
-  const osKey = process.platform === 'win32' ? 'windows-x64' : process.platform === 'darwin' ? 'mac-os-arm64' : 'linux'
+  const osKey = runtimeOsKey()
   const all = await retry(() => fetchJsonSafe<Record<string, Record<string, RuntimeEntry[]>>>(rewriteUrl(JAVA_RUNTIME_ALL)), 3, 1000)
   const entries = all[osKey]?.[component]
   if (!entries?.length) throw new Error(`没有找到 Java 运行时组件 ${component}（${osKey}）`)
   const entry = entries[0]
 
   const manifest = await retry(() => fetchJsonSafe<RuntimeManifest>(rewriteUrl(entry.manifest.url)), 3, 1000)
-  const root = join(P.runtime, component)
+  const dirName = runtimeDirName(component)
+  const root = join(P.runtime, dirName)
   ensureDir(root)
 
   const files = Object.entries(manifest.files).filter(([, f]) => f.type === 'file' && f.downloads?.raw)
@@ -233,7 +261,7 @@ export async function downloadJavaRuntime(component: string, onProgress?: (done:
   await pool(files, 4, async ([rel, f]) => {
     if (isCancelled?.()) throw new Error('已取消')
     const raw = f.downloads!.raw!
-    const dest = join(root, component, rel)
+    const dest = join(root, dirName, rel)
     const primary = rewriteUrl(raw.url)
     try {
       const r = await downloadFile(primary, dest, {
@@ -246,6 +274,9 @@ export async function downloadJavaRuntime(component: string, onProgress?: (done:
           onProgress?.(done, total, bytesDone, bytesTotal)
         }
       })
+      // Linux/macOS 下 manifest 标了 executable 的（bin/java 之类）要补执行位，
+      // 少这一步游戏根本起不来；Windows 上 chmod 是空操作
+      if (f.executable && process.platform !== 'win32') await fs.chmod(dest, 0o755).catch(() => undefined)
       // 已存在的文件不计字节，补上，进度才对得上
       if (r.skipped) bytesDone += raw.size
     } catch (e) {
@@ -257,6 +288,8 @@ export async function downloadJavaRuntime(component: string, onProgress?: (done:
 
   const exe = javaExe(component)
   if (!existsSync(exe)) throw new Error(`Java 运行时下载不完整：缺少 ${exe}`)
+  // manifest 万一没标 executable，这一步兜底
+  if (process.platform !== 'win32') await fs.chmod(exe, 0o755).catch(() => undefined)
   const p = await probeJava(exe)
   if (p.major < 8) throw new Error(`下载的 Java 版本异常: ${p.version}`)
   return { path: exe, version: p.version, major: p.major, source: 'mojang' }

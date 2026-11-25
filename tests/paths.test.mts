@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { assertSafeVersionId, isInside } from '../src/main/core/paths'
+import { assertSafeVersionId, defaultDataDir, isInside } from '../src/main/core/paths'
 
 test('isInside 认得自身与子目录', () => {
   const root = 'C:\\game'
@@ -39,4 +39,16 @@ test('assertSafeVersionId 挡住 Windows 保留字符 / 设备名 / 尾随点', 
   assert.throws(() => assertSafeVersionId('com1'))
   assert.throws(() => assertSafeVersionId('x.'))
   assert.throws(() => assertSafeVersionId('a<b'))
+})
+
+
+test('defaultDataDir 三个平台各有去处', () => {
+  const win = defaultDataDir('win32', 'C:\\Users\\u')
+  const mac = defaultDataDir('darwin', '/Users/u')
+  const linux = defaultDataDir('linux', '/home/u')
+  assert.ok(win.endsWith('feiyu-launcher'))
+  assert.ok(win.includes('AppData'))
+  assert.ok(mac.includes('Library'))
+  assert.ok(linux.includes('.local'))
+  assert.equal(linux.includes('AppData'), false)
 })

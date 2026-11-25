@@ -48,8 +48,23 @@ export class InstallCancelled extends Error {
 
 export function currentOS(): { name: string; arch: string } {
   const name = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux'
-  const arch = process.arch === 'x64' ? 'x86_64' : process.arch === 'arm64' ? 'arm64' : process.arch
+  // Minecraft 的规则里 32 位写作 x86，不是 ia32
+  const arch = process.arch === 'x64' ? 'x86_64' : process.arch === 'arm64' ? 'arm64' : process.arch === 'ia32' ? 'x86' : process.arch
   return { name, arch }
+}
+
+/**
+ * 新版 JSON（1.19+）把 natives 拆成三条：natives-windows / -arm64 / -x86，
+ * 而规则里只写 allow windows，不区分位数——只能按名字后缀自己挑，
+ * 否则三条全会下载、还会互相覆盖 DLL（先解压的赢，32 位机器上就拿到 64 位 DLL 了）。
+ */
+export function nativeMatchesArch(name: string, arch: string): boolean {
+  const m = /:natives-[a-z]+(?:-(arm64|x86))?$/.exec(name)
+  if (!m) return true
+  const suffix = m[1]
+  if (arch === 'x86') return suffix === 'x86'
+  if (arch === 'arm64') return suffix === 'arm64'
+  return !suffix
 }
 
 /** 平台信息是进程常量，缓存一份，别每条规则都新建对象 */
@@ -94,6 +109,8 @@ export function resolveLibraries(libs: Library[]): ResolvedLibraryEntry[] {
   const seen = new Set<string>()
   for (const lib of libs) {
     if (!rulesAllow(lib.rules)) continue
+    // natives 的位数得自己筛：规则里写着 allow windows 的 64 位包，32 位机器不能下
+    if (/:natives-/.test(lib.name) && !nativeMatchesArch(lib.name, os.arch)) continue
     const coords = lib.name.split(':')
     // key 要带上 classifier：lwjgl 和 lwjgl:natives-windows 是同一个 group:artifact，
     // 但它们是两个不同的文件，不能被当成重复项去掉
@@ -115,7 +132,7 @@ export function resolveLibraries(libs: Library[]): ResolvedLibraryEntry[] {
     if (lib.natives) {
       const classifierKey = lib.natives[os.name]
       if (classifierKey) {
-        const cl = classifierKey.replace('${arch}', os.arch === 'arm64' ? 'arm64' : '64')
+        const cl = classifierKey.replace('${arch}', os.arch === 'arm64' ? 'arm64' : os.arch === 'x86' ? '32' : '64')
         const art = lib.downloads?.classifiers?.[cl]
         if (art) native = { artifact: art, exclude: lib.extract?.exclude }
       }

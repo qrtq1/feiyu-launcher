@@ -1,0 +1,33 @@
+# Linux 构建配置。
+# 主配置里的 electronDist 指向 node_modules/electron/dist（Windows 那份），
+# 打 Linux 包必须换成 Linux 的二进制，所以单独一份配置。
+appId: com.feiyu.launcher
+productName: 肥鱼启动器
+copyright: MIT Licensed
+directories:
+  output: dist
+  buildResources: build
+electronDist: .cache/electron-linux-x64/dist
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+asar: true
+compression: normal
+linux:
+  target:
+    - AppImage
+    - deb
+    - tar.gz
+  category: Game
+  icon: build/icon.png
+  synopsis: 从零写起的 Minecraft Java 版启动器
+  executableName: feiyu-launcher
+  desktop:
+    entry:
+      Name: 肥鱼启动器
+      Comment: Minecraft Java 版启动器
+      Categories: Game;

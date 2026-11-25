@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { JavaRuntimeInfo } from '../../../shared/types'
 import { useApp } from '../store'
-import { Icon, Switch } from '../components/ui'
+import { Icon, Switch, Tag } from '../components/ui'
+import { MEM_X86_CAP_MB, memoryPlan, mbToGb, sliderMaxMemory, totalMemoryText } from '../../../shared/memory'
 
 /** 常用强调色，点一下就能换 */
 const ACCENT_PRESETS = ['#1663bc', '#0f766e', '#7c3aed', '#b4243a', '#b45309', '#164e63']
@@ -63,7 +64,7 @@ export default function Settings() {
   const [loadingJava, setLoadingJava] = useState(false)
   const [picking, setPicking] = useState(false)
   const [pickingBackground, setPickingBackground] = useState(false)
-  const [platform, setPlatform] = useState<{ os: string; arch: string; version: string; userData: string } | null>(null)
+  const [platform, setPlatform] = useState<{ os: string; arch: string; version: string; userData: string; totalMem: number; freeMem: number } | null>(null)
   const version = platform?.version
 
   const reloadJava = async (): Promise<void> => {
@@ -91,9 +92,20 @@ export default function Settings() {
     if (dir) set({ gameDir: dir })
   }
 
+  const memTotal = platform?.totalMem ?? 0
+  // 32 位启动器只能配 32 位 Java：界面和主进程用同一套规则算，显示的数就是真参数
+  const arch32 = platform?.arch === 'ia32'
+  const memPlan = memoryPlan('auto', memTotal, { maxMemory: settings.maxMemory, minMemory: settings.minMemory }, { arch32 })
+  const autoMax = memPlan.autoMax
+  const autoMin = memPlan.minMemory
+  const rangeMax = arch32 ? MEM_X86_CAP_MB : sliderMaxMemory(memTotal)
+  const numMax = arch32 ? MEM_X86_CAP_MB : 65536
+  const memTotalText = totalMemoryText(memTotal)
+
+  const pathSep = platform?.os === 'win32' ? '\\' : '/'
   const effectiveVersionsDir = settings.versionsDir
     ? settings.versionsDir
-    : `${settings.gameDir.replace(/[\\/]+$/, '')}\\versions`
+    : `${settings.gameDir.replace(/[\\/]+$/, '')}${pathSep}versions`
   const customVersionsDir = settings.versionsDir !== ''
 
   const pickVersionsDir = async (): Promise<void> => {
@@ -409,38 +421,111 @@ export default function Settings() {
       </section>
 
       <section className="set-group">
-        <div className="set-title">内存</div>
+        <div className="set-title">游戏内存</div>
         <div className="set-row">
-          <div className="set-label">最大内存</div>
+          <div className="set-label">
+            分配方式
+            <span className="set-desc">自动按物理内存算；手动自己定，大型整合包可以多给点</span>
+          </div>
           <div className="set-control">
-            <input
-              className="input num"
-              type="number"
-              min={512}
-              max={65536}
-              step={256}
-              value={settings.maxMemory}
-              onChange={(e) => set({ maxMemory: Math.max(512, Number(e.target.value) || 512) })}
-            />
-            <span className="unit">MB</span>
-            <span className="set-desc">建议 4096 以上，装了模组再加</span>
+            <div className="segmented">
+              <button className={settings.memoryMode === 'auto' ? 'active' : ''} onClick={() => set({ memoryMode: 'auto' })}>
+                自动
+              </button>
+              <button className={settings.memoryMode === 'manual' ? 'active' : ''} onClick={() => set({ memoryMode: 'manual' })}>
+                手动
+              </button>
+            </div>
           </div>
         </div>
-        <div className="set-row">
-          <div className="set-label">最小内存</div>
-          <div className="set-control">
-            <input
-              className="input num"
-              type="number"
-              min={0}
-              max={65536}
-              step={256}
-              value={settings.minMemory}
-              onChange={(e) => set({ minMemory: Math.max(0, Number(e.target.value) || 0) })}
-            />
-            <span className="unit">MB</span>
+        {arch32 && (
+          <div className="set-row">
+            <div className="set-label">
+              32 位模式
+              <span className="set-desc">32 位 Java 只能寻址约 4 GB，堆最多 {MEM_X86_CAP_MB} MB；1.17 以后的版本可能吃紧</span>
+            </div>
+            <div className="set-control">
+              <Tag tone="warn">32 位</Tag>
+            </div>
           </div>
-        </div>
+        )}
+        {settings.memoryMode === 'auto' ? (
+          <>
+            <div className="set-row">
+              <div className="set-label">物理内存</div>
+              <div className="set-control">
+                <span className="mem-num">{memTotalText}</span>
+              </div>
+            </div>
+            <div className="set-row">
+              <div className="set-label">
+                分配给游戏
+                <span className="set-desc">{arch32 ? '32 位 Java 固定给 1024 MB，再大 JVM 起不来' : '先给系统留 2 GB，剩下的拿六成，最多 12 GB'}</span>
+              </div>
+              <div className="set-control">
+                <span className="mem-num">{autoMax} MB</span>
+                <Tag tone="accent">{mbToGb(autoMax)}</Tag>
+              </div>
+            </div>
+            <div className="set-row">
+              <div className="set-label">
+                启动参数
+                <span className="set-desc">自动模式 -Xms 固定 512 MB；真启动时还会按选中的 Java 位数再压一次</span>
+              </div>
+              <div className="set-control">
+                <span className="mem-arg">-Xms{autoMin}M -Xmx{autoMax}M</span>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="set-row">
+              <div className="set-label">
+                最大内存
+                <span className="set-desc">本机 {memTotalText}，自动建议 {autoMax} MB</span>
+              </div>
+              <div className="set-control">
+                <input
+                  className="range"
+                  type="range"
+                  min={512}
+                  max={rangeMax}
+                  step={512}
+                  value={Math.min(settings.maxMemory, rangeMax)}
+                  onChange={(e) => set({ maxMemory: Number(e.target.value) })}
+                />
+                <input
+                  className="input num"
+                  type="number"
+                  min={512}
+                  max={numMax}
+                  step={512}
+                  value={settings.maxMemory}
+                  onChange={(e) => set({ maxMemory: Math.min(numMax, Math.max(512, Number(e.target.value) || 512)) })}
+                />
+                <span className="unit">MB</span>
+              </div>
+            </div>
+            <div className="set-row">
+              <div className="set-label">
+                最小内存
+                <span className="set-desc">-Xms，填 0 就不传；不能大于最大内存</span>
+              </div>
+              <div className="set-control">
+                <input
+                  className="input num"
+                  type="number"
+                  min={0}
+                  max={settings.maxMemory}
+                  step={512}
+                  value={settings.minMemory}
+                  onChange={(e) => set({ minMemory: Math.max(0, Math.min(Number(e.target.value) || 0, settings.maxMemory)) })}
+                />
+                <span className="unit">MB</span>
+              </div>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="set-group">

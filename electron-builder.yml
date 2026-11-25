@@ -37,8 +37,25 @@ nsis:
   shortcutName: 肥鱼启动器
   deleteAppDataOnUninstall: false
 mac:
-  target: dmg
+  target:
+    - dmg
+    - zip
   category: public.app-category.games
+  icon: build/icon.png
+  # 本地没有开发者证书：跳过签名，不然打包会卡在找 identity
+  identity: null
 linux:
-  target: AppImage
+  target:
+    - AppImage
+    - deb
+    - tar.gz
   category: Game
+  icon: build/icon.png
+  synopsis: 从零写起的 Minecraft Java 版启动器
+  # 可执行文件名用 ASCII，桌面上的显示名还是中文，免得某些系统的 locale 把文件名搞坏
+  executableName: feiyu-launcher
+  desktop:
+    entry:
+      Name: 肥鱼启动器
+      Comment: Minecraft Java 版启动器
+      Categories: Game;

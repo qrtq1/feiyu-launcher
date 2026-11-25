@@ -14,24 +14,35 @@ import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:pa
  */
 let gameDirOverride: string | null = null
 
+/** 各平台的默认数据根目录（纯函数，方便单测） */
+export function defaultDataDir(platform: string = process.platform, home: string = homedir()): string {
+  if (platform === 'win32') return join(home, 'AppData', 'Roaming', 'feiyu-launcher')
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'feiyu-launcher')
+  // Linux 照 XDG 规范：~/.local/share
+  return join(home, '.local', 'share', 'feiyu-launcher')
+}
+
 /**
  * 数据根目录（存放 launcher-store.json 和 minecraft/）。
  * 优先级：
  *   1. FEIYU_DATA_DIR 环境变量（测试用）
- *   2. 打包版：exe 旁边的 data\ —— 绿色版把数据带在自己身边，不写 C 盘
- *   3. 开发模式：%APPDATA%\feiyu-launcher
+ *   2. 打包版 Windows：exe 旁边的 data\ —— 绿色版把数据带在自己身边
+ *      （AppImage 里 exe 在只读挂载点，这条路走不通，不能照搬）
+ *   3. 开发模式：electron 的 userData
+ *   4. 兜底：各平台默认目录
  */
 export function dataRoot(): string {
   if (process.env.FEIYU_DATA_DIR) return process.env.FEIYU_DATA_DIR
   try {
     if (app?.isPackaged && app.getPath) {
-      return join(dirname(app.getPath('exe')), 'data')
+      if (process.platform === 'win32') return join(dirname(app.getPath('exe')), 'data')
+      return defaultDataDir()
     }
     if (app?.getPath) return app.getPath('userData')
   } catch {
     /* 纯 node 环境（CLI 测试）下没有 electron app */
   }
-  return join(homedir(), 'AppData', 'Roaming', 'feiyu-launcher')
+  return defaultDataDir()
 }
 
 /** 默认游戏目录：C:\Users\<user>\AppData\Roaming\feiyu-launcher\minecraft */
